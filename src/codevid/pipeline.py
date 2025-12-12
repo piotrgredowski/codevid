@@ -110,11 +110,12 @@ class Pipeline:
             )
 
         except Exception as e:
+            import traceback
             return PipelineResult(
                 output_path=None,
                 script=VideoScript(title="", introduction="", segments=[], conclusion=""),
                 success=False,
-                error=str(e),
+                error=f"{e}\n\n{traceback.format_exc()}",
             )
 
     def _parse_test(self) -> ParsedTest:

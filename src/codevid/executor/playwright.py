@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,7 +58,6 @@ class PlaywrightExecutor:
         """
         markers: list[EventMarker] = []
         recorded_video: Path | None = None
-        start_time = time.time()
 
         async with async_playwright() as p:
             # Launch browser (visible for recording)
@@ -82,6 +82,9 @@ class PlaywrightExecutor:
 
             context = await self._browser.new_context(**context_kwargs)
             self._page = await context.new_page()
+
+            # Reset timer to align with the start of video recording (which begins at page creation)
+            start_time = time.time()
 
             try:
                 for i, step in enumerate(test.steps):
@@ -138,11 +141,16 @@ class PlaywrightExecutor:
                         )
                     markers.append(marker)
 
+                    # Safety Buffer: Add a gap between steps to prevent video bleed
+                    # This time will be excluded from the final video segments
+                    await asyncio.sleep(0.5)
+
             finally:
                 if self._page:
                     try:
-                        # Playwright writes the video on page close
+                        # Close page to ensure video is saved
                         await self._page.close()
+                        # Capture video path
                         if self._page.video:
                             path = await self._page.video.path()
                             recorded_video = Path(path)
@@ -226,6 +234,10 @@ class PlaywrightExecutor:
             match = re.match(r"get_by_placeholder\('([^']+)'", target)
             if match:
                 return page.get_by_placeholder(match.group(1))
+        
+        # Handle explicit xpath selector
+        if target.startswith("xpath="):
+            return page.locator(target)
 
         # Default: use as CSS selector
         return page.locator(target)

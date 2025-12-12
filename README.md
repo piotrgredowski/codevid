@@ -1,38 +1,92 @@
 # Codevid
 
-Generate video tutorials from automated tests using LLMs.
+**Turn your automated tests into professional video tutorials.**
 
-## Installation
+Codevid is a CLI tool that uses AI to convert your existing Python Playwright tests into narrated, captioned video tutorials. It analyzes your test code, generates a natural language script, records the execution, and automatically edits everything into a polished video.
+
+## 🚀 Features
+
+*   **Automated Scriptwriting**: Uses LLMs (OpenAI/Anthropic) to explain *why* an action is happening, not just *what* is happening.
+*   **Real Execution**: Records your actual app in a browser to ensure the video matches reality.
+*   **AI Voiceovers**: Integrated Text-to-Speech (OpenAI/Edge TTS) for professional narration.
+*   **Smart Editing**: Automatically synchronizes video speed with audio narration and adds captions.
+
+## 📋 Prerequisites
+
+*   **Python 3.11+**
+*   **OpenAI API Key**: Codevid requires access to an LLM to generate the narration script.
+
+## 🛠️ Installation
+
+1.  **Install Codevid** (assuming it is available via pip or from source):
+    ```bash
+    pip install codevid
+    ```
+
+2.  **Install Playwright Browsers**:
+    ```bash
+    playwright install chromium
+    ```
+
+## 🔑 Configuration
+
+You **must** provide your OpenAI API key for the tool to function.
 
 ```bash
-pip install codevid
+export OPENAI_API_KEY="sk-..."
 ```
 
-## Usage
+*(Alternatively, you can configure Anthropic/Claude keys if you prefer that provider in the config).*
 
+## ⚡ Quick Start
+
+1.  **Initialize a project** (optional, creates a `codevid.yaml` config file):
+    ```bash
+    codevid init
+    ```
+
+2.  **Generate a video**:
+    Pass your Playwright test file to the `generate` command.
+
+    ```bash
+    codevid generate examples/test_login.py -o login_tutorial.mp4
+    ```
+
+## 📖 Usage Examples
+
+### Basic Generation
+Uses default settings (Anthropic/Edge TTS if not configured otherwise) to generate a video.
 ```bash
-# Generate a tutorial from a Playwright test
-codevid generate tests/test_login.py -o tutorial.mp4
-
-# Preview the script without recording
-codevid preview tests/test_login.py
-
-# Initialize a new project
-codevid init
+codevid generate tests/my_test.py
 ```
 
-## Configuration
-
-Create a `codevid.yaml` file:
-
-```yaml
-llm:
-  provider: anthropic
-
-tts:
-  provider: edge
-  voice: en-US-AriaNeural
-
-video:
-  include_captions: true
+### Using OpenAI for Everything
+Specify the LLM and TTS provider explicitly via CLI flags.
+```bash
+codevid generate tests/my_test.py \
+    --llm openai \
+    --tts openai \
+    --voice alloy \
+    --output tutorial.mp4
 ```
+
+### Preview Script Only
+Want to see what the AI will say before recording? Use preview mode.
+```bash
+codevid preview tests/my_test.py
+```
+
+### List Available Voices
+See which voices are available for your chosen provider.
+```bash
+codevid list-voices openai
+```
+
+## ⚠️ Current Limitations
+
+*   **Framework Support**: Currently, Codevid **only supports Python Playwright** tests.
+*   **Structure**: Tests must be written as standard functions or Pytest functions (e.g., `def test_example(page):`).
+
+## 📄 License
+
+[MIT](LICENSE)

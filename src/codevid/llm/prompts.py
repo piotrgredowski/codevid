@@ -18,7 +18,7 @@ Generate a video script with:
 2. A short “How to do it” segment that previews the plan before individual steps.
 3. Narration for each step (explain WHAT is happening and WHY).
 4. A conclusion that describes the expected outcome/result after the steps.
-
+5. The tutorial name should be short and concise.
 For each step narration:
 - Use natural, conversational language
 - Explain the user intent, not just the action
@@ -42,6 +42,7 @@ Important:
 - Each segment's text should be 1-3 sentences
 - Use second person ("you") to address the viewer
 - Be specific about UI elements being interacted with
+- Please be concise and avoid unnecessary filler words
 - Make sure that it sounds like a human wrote it, not a machine. This tutorial will be on youtube and needs to sound natural.
 """
 
@@ -56,6 +57,8 @@ Context: {context}
 Write 1-2 sentences explaining this step as if teaching someone.
 Focus on the user's goal, not the technical implementation.
 Do not use technical jargon like "selector" or "element".
+Please make sure that it only contains the narration text without any additional commentary.
+It has to be quick
 """
 
 INTRO_GENERATION_PROMPT = """\

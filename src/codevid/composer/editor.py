@@ -182,6 +182,39 @@ class VideoComposer:
             resolution=video_size,
             captions_path=captions_path,
         )
+    
+    def _extract_video_segment(
+        self, video: Any, start_time: float, end_time: float, target_duration: float
+    ) -> Any:
+        """Extract a segment from video and adjust to target duration."""
+        from moviepy import concatenate_videoclips
+
+        # Clamp times to video bounds
+        start_time = max(0, min(start_time, video.duration))
+        end_time = max(start_time, min(end_time, video.duration))
+
+        # Extract segment
+        if end_time > start_time:
+            segment = video.subclipped(start_time, end_time)
+        else:
+            # Fallback: use a single frame
+            segment = video.to_ImageClip(t=start_time).with_duration(0.1)
+
+        # Adjust duration to match target
+        if segment.duration < target_duration:
+            # Extend with frozen last frame
+            freeze_duration = target_duration - segment.duration
+            last_frame_time = max(0, segment.duration - 0.01)
+            last_frame = segment.to_ImageClip(t=last_frame_time).with_duration(
+                freeze_duration
+            )
+            segment = concatenate_videoclips([segment, last_frame])
+        elif segment.duration > target_duration:
+            # Trim to target duration
+            segment = segment.subclipped(0, target_duration)
+
+        return segment
+
 
     def _add_caption_clips(self, video: Any, captions: list[Caption]) -> Any:
         """Add caption text overlays to video."""
@@ -376,37 +409,6 @@ class VideoComposer:
             break_on_hyphens=False,
         )
 
-    def _extract_video_segment(
-        self, video: Any, start_time: float, end_time: float, target_duration: float
-    ) -> Any:
-        """Extract a segment from video and adjust to target duration."""
-        from moviepy import concatenate_videoclips
-
-        # Clamp times to video bounds
-        start_time = max(0, min(start_time, video.duration))
-        end_time = max(start_time, min(end_time, video.duration))
-
-        # Extract segment
-        if end_time > start_time:
-            segment = video.subclipped(start_time, end_time)
-        else:
-            # Fallback: use a single frame
-            segment = video.to_ImageClip(t=start_time).with_duration(0.1)
-
-        # Adjust duration to match target
-        if segment.duration < target_duration:
-            # Extend with frozen last frame
-            freeze_duration = target_duration - segment.duration
-            last_frame_time = max(0, segment.duration - 0.01)
-            last_frame = segment.to_ImageClip(t=last_frame_time).with_duration(
-                freeze_duration
-            )
-            segment = concatenate_videoclips([segment, last_frame])
-        elif segment.duration > target_duration:
-            # Trim to target duration
-            segment = segment.subclipped(0, target_duration)
-
-        return segment
 
 
 class CompositionError(Exception):

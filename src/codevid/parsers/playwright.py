@@ -154,30 +154,49 @@ class PlaywrightParser(TestParser):
         steps = []
         # Track processed call node ids to avoid duplicates from await
         processed_calls: set[int] = set()
+        
+        # Simple local variable context (name -> value)
+        # We only track string constants assigned to variables
+        context: dict[str, str] = {}
 
-        for node in ast.walk(func):
-            # Handle await expressions - mark the inner call as processed
-            if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
-                call_node = node.value
-                if id(call_node) not in processed_calls:
-                    processed_calls.add(id(call_node))
-                    step = self._parse_call(call_node, source)
-                    if step:
-                        steps.append(step)
-            elif isinstance(node, ast.Call):
-                # Skip if already processed via await
-                if id(node) not in processed_calls:
-                    processed_calls.add(id(node))
-                    step = self._parse_call(node, source)
-                    if step:
-                        steps.append(step)
+        for node in func.body:
+            # Handle Assignments: var = "value"
+            if isinstance(node, ast.Assign):
+                self._update_context(node, context)
+                continue
+
+            # Walk the node to find calls
+            for child in ast.walk(node):
+                # Handle await expressions - mark the inner call as processed
+                if isinstance(child, ast.Await) and isinstance(child.value, ast.Call):
+                    call_node = child.value
+                    if id(call_node) not in processed_calls:
+                        processed_calls.add(id(call_node))
+                        step = self._parse_call(call_node, source, context)
+                        if step:
+                            steps.append(step)
+                elif isinstance(child, ast.Call):
+                    # Skip if already processed via await
+                    if id(child) not in processed_calls:
+                        processed_calls.add(id(child))
+                        step = self._parse_call(child, source, context)
+                        if step:
+                            steps.append(step)
 
         # Sort by line number
         steps.sort(key=lambda s: s.line_number)
 
         return steps
 
-    def _parse_call(self, node: ast.Call, source: str) -> TestStep | None:
+    def _update_context(self, node: ast.Assign, context: dict[str, str]) -> None:
+        """Update context with variable assignments if value is a string constant."""
+        # Only handle simple assignment to a single target: x = "str"
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            var_name = node.targets[0].id
+            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                context[var_name] = node.value.value
+
+    def _parse_call(self, node: ast.Call, source: str, context: dict[str, str]) -> TestStep | None:
         """Parse a function call into a TestStep."""
         method_name = self._get_method_name(node)
         if method_name is None:
@@ -188,10 +207,10 @@ class PlaywrightParser(TestParser):
             return None
 
         # Get target (selector or URL)
-        target = self._extract_target(node, method_name)
+        target = self._extract_target(node, method_name, context)
 
         # Get value (for fill, type, etc.)
-        value = self._extract_value(node, method_name)
+        value = self._extract_value(node, method_name, context)
 
         # Get source code for this node
         source_code = self._get_source_segment(source, node)
@@ -214,50 +233,50 @@ class PlaywrightParser(TestParser):
             return node.func.attr
         return None
 
-    def _extract_target(self, node: ast.Call, method_name: str) -> str:
+    def _extract_target(self, node: ast.Call, method_name: str, context: dict[str, str]) -> str:
         """Extract the target selector or URL from arguments."""
         # For navigation methods, first arg is URL
         if method_name in ("goto", "wait_for_url"):
-            return self._get_string_arg(node, 0) or ""
+            return self._get_string_arg(node, 0, context) or ""
 
         # For locator methods, we need to find the selector
         # This could be from page.locator("selector") or page.click("selector")
         if method_name in self.LOCATOR_METHODS:
             # First check if this is a chained call: page.locator("selector").click()
-            selector = self._find_locator_selector(node)
+            selector = self._find_locator_selector(node, context)
             if selector:
                 return selector
 
             # Direct page method: page.click("selector")
-            selector = self._get_string_arg(node, 0)
+            selector = self._get_string_arg(node, 0, context)
             if selector:
                 return selector
 
         # For expect assertions, find the locator
         if method_name.startswith("to_"):
-            selector = self._find_expect_locator(node)
+            selector = self._find_expect_locator(node, context)
             if selector:
                 return selector
 
-        return self._get_string_arg(node, 0) or ""
+        return self._get_string_arg(node, 0, context) or ""
 
-    def _extract_value(self, node: ast.Call, method_name: str) -> str | None:
+    def _extract_value(self, node: ast.Call, method_name: str, context: dict[str, str]) -> str | None:
         """Extract the value argument for input methods."""
         if method_name in ("fill", "type", "press_sequentially"):
             # Check if chained (page.locator().fill("value")) - value is arg 0
             # Or direct (page.fill("#sel", "value")) - value is arg 1
             if self._is_chained_locator_call(node):
-                return self._get_string_arg(node, 0)
-            return self._get_string_arg(node, 1)
+                return self._get_string_arg(node, 0, context)
+            return self._get_string_arg(node, 1, context)
         if method_name == "press":
-            return self._get_string_arg(node, 0)
+            return self._get_string_arg(node, 0, context)
         if method_name in ("to_have_text", "to_contain_text", "to_have_value"):
-            return self._get_string_arg(node, 0)
+            return self._get_string_arg(node, 0, context)
         if method_name == "select_option":
             # Same chain detection for select_option
             if self._is_chained_locator_call(node):
-                return self._get_string_arg(node, 0)
-            return self._get_string_arg(node, 1) or self._get_string_arg(node, 0)
+                return self._get_string_arg(node, 0, context)
+            return self._get_string_arg(node, 1, context) or self._get_string_arg(node, 0, context)
         return None
 
     def _is_chained_locator_call(self, node: ast.Call) -> bool:
@@ -271,28 +290,35 @@ class PlaywrightParser(TestParser):
                                 "get_by_label", "get_by_placeholder",
                                 "get_by_test_id", "get_by_alt_text")
 
-    def _get_string_arg(self, node: ast.Call, index: int) -> str | None:
+    def _get_string_arg(self, node: ast.Call, index: int, context: dict[str, str]) -> str | None:
         """Get a string argument at the given index."""
         if index < len(node.args):
             arg = node.args[index]
             if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                 return arg.value
+            if isinstance(arg, ast.Name):
+                # Resolve variable
+                return context.get(arg.id, None)
             if isinstance(arg, ast.JoinedStr):
                 # f-string - try to extract static parts
-                return self._extract_fstring(arg)
+                return self._extract_fstring(arg, context)
         return None
 
-    def _extract_fstring(self, node: ast.JoinedStr) -> str:
+    def _extract_fstring(self, node: ast.JoinedStr, context: dict[str, str]) -> str:
         """Extract a simplified representation of an f-string."""
         parts = []
         for value in node.values:
             if isinstance(value, ast.Constant):
                 parts.append(str(value.value))
+            elif isinstance(value, ast.FormattedValue) and isinstance(value.value, ast.Name):
+                # Try to resolve variable in f-string
+                var_value = context.get(value.value.id)
+                parts.append(var_value if var_value is not None else "{...}")
             else:
                 parts.append("{...}")
         return "".join(parts)
 
-    def _find_locator_selector(self, node: ast.Call) -> str | None:
+    def _find_locator_selector(self, node: ast.Call, context: dict[str, str]) -> str | None:
         """Find selector from chained locator call like page.locator("sel").click()."""
         # Walk up the chain to find locator() call
         current = node.func
@@ -303,7 +329,7 @@ class PlaywrightParser(TestParser):
                 if inner_method in ("locator", "get_by_role", "get_by_text",
                                     "get_by_label", "get_by_placeholder",
                                     "get_by_test_id", "get_by_alt_text"):
-                    selector = self._get_string_arg(inner_call, 0)
+                    selector = self._get_string_arg(inner_call, 0, context)
                     if selector:
                         # Include the method for context
                         if inner_method != "locator":
@@ -315,7 +341,7 @@ class PlaywrightParser(TestParser):
                 current = current.value
         return None
 
-    def _find_expect_locator(self, node: ast.Call) -> str | None:
+    def _find_expect_locator(self, node: ast.Call, context: dict[str, str]) -> str | None:
         """Find the locator from an expect() assertion chain."""
         # expect(page.locator("sel")).to_be_visible()
         current = node.func
@@ -329,19 +355,19 @@ class PlaywrightParser(TestParser):
                     if inner.args:
                         arg = inner.args[0]
                         if isinstance(arg, ast.Call):
-                            return self._find_locator_selector_from_call(arg)
+                            return self._find_locator_selector_from_call(arg, context)
                 current = inner.func
             else:
                 break
         return None
 
-    def _find_locator_selector_from_call(self, node: ast.Call) -> str | None:
+    def _find_locator_selector_from_call(self, node: ast.Call, context: dict[str, str]) -> str | None:
         """Extract selector from a locator call."""
         method = self._get_method_name(node)
         if method in ("locator", "get_by_role", "get_by_text",
                       "get_by_label", "get_by_placeholder",
                       "get_by_test_id", "get_by_alt_text"):
-            selector = self._get_string_arg(node, 0)
+            selector = self._get_string_arg(node, 0, context)
             if selector:
                 if method != "locator":
                     return f"{method}({selector!r})"

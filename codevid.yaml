@@ -6,8 +6,8 @@ project:
   output_dir: "./tutorials"
 
 llm:
-  provider: anthropic
-  # model: claude-sonnet-4-20250514  # Optional: specify model
+  provider: openai
+  model: gpt-5.1-2025-11-13  # Optional: specify model
 
 tts:
   provider: openai

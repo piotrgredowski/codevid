@@ -12,7 +12,7 @@ from codevid.models import NarrationSegment, ParsedTest, TestStep, VideoScript
 class OpenAIProvider(LLMProvider):
     """LLM provider using OpenAI's API."""
 
-    DEFAULT_MODEL = "gpt-4o"
+    DEFAULT_MODEL = "gpt-5.1-2025-11-13"
 
     def __init__(
         self,
@@ -64,7 +64,7 @@ class OpenAIProvider(LLMProvider):
         try:
             response = self._client.chat.completions.create(
                 model=self._model,
-                max_tokens=4096,
+                max_completion_tokens=4096,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
             )
