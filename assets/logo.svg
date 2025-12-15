@@ -1,0 +1,26 @@
+<svg width="800" height="200" viewBox="0 0 800 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Icon Group -->
+  <g transform="translate(20, 25) scale(0.2929)">
+    <!-- Shadow -->
+    <rect x="32" y="42" width="448" height="448" rx="48" fill="#000000" fill-opacity="0.2"/>
+    <!-- Terminal Window -->
+    <rect x="32" y="32" width="448" height="448" rx="48" fill="#1E293B"/>
+    <!-- Header -->
+    <path d="M32 80C32 53.4903 53.4903 32 80 32H432C458.51 32 480 53.4903 480 80V112H32V80Z" fill="#334155"/>
+    <circle cx="80" cy="72" r="12" fill="#EF4444"/>
+    <circle cx="120" cy="72" r="12" fill="#F59E0B"/>
+    <circle cx="160" cy="72" r="12" fill="#10B981"/>
+    <!-- Play Button -->
+    <path d="M352.5 240.6C365.833 248.298 365.833 267.702 352.5 275.4L208.5 358.544C195.167 366.242 178.5 356.54 178.5 341.144L178.5 174.856C178.5 159.46 195.167 149.758 208.5 157.456L352.5 240.6Z" fill="url(#paint0_linear)"/>
+  </g>
+  
+  <!-- Text -->
+  <text x="190" y="135" fill="#1E293B" font-family="Courier New, monospace" font-weight="bold" font-size="110" letter-spacing="-4">Codevid</text>
+  
+  <defs>
+    <linearGradient id="paint0_linear" x1="178.5" y1="258" x2="380" y2="258" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#818CF8"/>
+    </linearGradient>
+  </defs>
+</svg>
