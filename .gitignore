@@ -10,6 +10,13 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# OS files
+.DS_Store
+
+# Generated files
+*.txt
+*.srt
+
 # C extensions
 *.so
 
