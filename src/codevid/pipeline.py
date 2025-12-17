@@ -1,6 +1,7 @@
 """Main pipeline orchestration for Codevid."""
 
 import asyncio
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -60,6 +61,16 @@ class Pipeline:
         if self._progress_callback:
             self._progress_callback(percent, message)
 
+    def _get_temp_dir(self) -> Path:
+        """Get the temporary directory path."""
+        return self.config.output.parent / ".codevid_temp"
+
+    def _cleanup_temp(self) -> None:
+        """Remove the temporary directory and all its contents."""
+        temp_dir = self._get_temp_dir()
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
     def run(self) -> PipelineResult:
         """Execute the pipeline synchronously."""
         return asyncio.run(self.run_async())
@@ -75,8 +86,6 @@ class Pipeline:
             # Step 2: Generate script with LLM
             self._report_progress(15, "Generating narration script...")
             script = await self._generate_script(parsed_test)
-            with open("script.txt", "w") as f:
-                f.write(script.get_full_text())
             self._report_progress(25, "Script generated")
 
             # Preview mode stops here
@@ -100,6 +109,10 @@ class Pipeline:
             # Step 5: Compose final video
             self._report_progress(80, "Composing final video...")
             result = self._compose_video(recording_path, script, audio_segments, markers)
+
+            # Step 6: Cleanup temporary files
+            self._report_progress(95, "Cleaning up temporary files...")
+            self._cleanup_temp()
             self._report_progress(100, "Complete!")
 
             return PipelineResult(
@@ -111,6 +124,8 @@ class Pipeline:
 
         except Exception as e:
             import traceback
+            # Cleanup temp files even on failure
+            self._cleanup_temp()
             return PipelineResult(
                 output_path=None,
                 script=VideoScript(title="", introduction="", segments=[], conclusion=""),
@@ -141,7 +156,7 @@ class Pipeline:
             )
 
         audio_paths: list[Path] = []
-        output_dir = self.config.output.parent / ".codevid_temp"
+        output_dir = self._get_temp_dir()
         output_dir.mkdir(exist_ok=True)
 
         # Generate intro audio
@@ -166,7 +181,7 @@ class Pipeline:
         """Execute test while recording screen."""
         from codevid.executor.playwright import ExecutorConfig, PlaywrightExecutor
 
-        output_dir = self.config.output.parent / ".codevid_temp"
+        output_dir = self._get_temp_dir()
         output_dir.mkdir(exist_ok=True)
         video_dir = output_dir / "playwright_video"
         video_dir.mkdir(exist_ok=True)

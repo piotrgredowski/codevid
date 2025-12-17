@@ -5,7 +5,7 @@ description = "Generate video tutorials from automated tests using LLMs"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Codevid Team" }]
+authors = [{ name = "Mateusz Staniaszek" }]
 keywords = ["video", "tutorial", "testing", "playwright", "llm", "automation"]
 classifiers = [
     "Development Status :: 3 - Alpha",
