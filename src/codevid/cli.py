@@ -74,28 +74,28 @@ def generate(
         "--output",
         help="Output video path.",
     ),
-    llm: LLMChoice = typer.Option(
-        LLMChoice.anthropic,
+    llm: Optional[LLMChoice] = typer.Option(
+        None,
         "--llm",
-        help="LLM provider for script generation.",
+        help="LLM provider for script generation (overrides config file).",
     ),
     llm_model: Optional[str] = typer.Option(
         None,
         "--llm-model",
         help="Specific LLM model to use.",
     ),
-    tts: TTSChoice = typer.Option(
-        TTSChoice.edge,
+    tts: Optional[TTSChoice] = typer.Option(
+        None,
         "--tts",
-        help="Text-to-speech provider.",
+        help="Text-to-speech provider (overrides config file).",
     ),
     voice: Optional[str] = typer.Option(
         None,
         "--voice",
         help="TTS voice name.",
     ),
-    theme: str = typer.Option(
-        "default",
+    theme: Optional[str] = typer.Option(
+        None,
         "--theme",
         help="Video theme/style.",
     ),
@@ -104,8 +104,8 @@ def generate(
         "--app-name",
         help="Application name for narration context.",
     ),
-    captions: bool = typer.Option(
-        True,
+    captions: Optional[bool] = typer.Option(
+        None,
         "--captions/--no-captions",
         help="Include captions in video.",
     ),
@@ -128,25 +128,29 @@ def generate(
     ),
 ) -> None:
     """Generate a video tutorial from a test file."""
-    # Load configuration
+    # Load configuration from file (or defaults)
     config = load_config(config_file)
 
-    # Override with CLI options
-    if llm_model:
+    # Override with CLI options only if explicitly provided
+    if llm is not None:
+        config.llm.provider = LLMProviderType(llm.value)
+    if llm_model is not None:
         config.llm.model = llm_model
-    config.llm.provider = LLMProviderType(llm.value)
-    config.tts.provider = TTSProviderType(tts.value)
-    if voice:
+    if tts is not None:
+        config.tts.provider = TTSProviderType(tts.value)
+    if voice is not None:
         config.tts.voice = voice
-    config.video.theme = theme
-    config.video.include_captions = captions
+    if theme is not None:
+        config.video.theme = theme
+    if captions is not None:
+        config.video.include_captions = captions
 
     console.print(
         Panel(
             f"[bold]Generating tutorial from:[/bold] {test_file}\n"
             f"[bold]Output:[/bold] {output}\n"
-            f"[bold]LLM:[/bold] {llm.value} ({llm_model or 'default'})\n"
-            f"[bold]TTS:[/bold] {tts.value}",
+            f"[bold]LLM:[/bold] {config.llm.provider.value} ({config.llm.model or 'default'})\n"
+            f"[bold]TTS:[/bold] {config.tts.provider.value}",
             title="Codevid",
             border_style="blue",
         )
@@ -263,10 +267,10 @@ def preview(
         exists=True,
         readable=True,
     ),
-    llm: LLMChoice = typer.Option(
-        LLMChoice.anthropic,
+    llm: Optional[LLMChoice] = typer.Option(
+        None,
         "--llm",
-        help="LLM provider.",
+        help="LLM provider (overrides config file).",
     ),
     llm_model: Optional[str] = typer.Option(
         None,
@@ -277,6 +281,12 @@ def preview(
         None,
         "--app-name",
         help="Application name for context.",
+    ),
+    config_file: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to configuration file.",
     ),
     verbose: bool = typer.Option(
         False,
@@ -289,9 +299,10 @@ def preview(
 
     This is a shortcut for `codevid generate --preview`.
     """
-    config = load_config()
-    config.llm.provider = LLMProviderType(llm.value)
-    if llm_model:
+    config = load_config(config_file)
+    if llm is not None:
+        config.llm.provider = LLMProviderType(llm.value)
+    if llm_model is not None:
         config.llm.model = llm_model
 
     _run_preview(test_file, config, app_name, verbose)

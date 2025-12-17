@@ -2,11 +2,11 @@
 
 import asyncio
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
-from codevid.audio.tts import AudioSegment, TTSProvider
+from codevid.audio.tts import TTSProvider
 from codevid.composer.editor import CompositionConfig, CompositionResult, VideoComposer
 from codevid.llm.base import LLMProvider
 from codevid.models import ParsedTest, VideoScript
