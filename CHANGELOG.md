@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.0.5 (2025-12-17)
+
+### Bug Fixes
+
+- Remove deprecated configuration and tutorial files; enhance audio synchronization in pipeline
+  ([`483e494`](https://github.com/MStaniaszek1998/codevid/commit/483e4945b4ef180240644c79f05df5a0b9516592))
+
+
 ## v1.0.4 (2025-12-17)
 
 ### Bug Fixes
