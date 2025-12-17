@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.0.2 (2025-12-17)
+
+### Bug Fixes
+
+- Enhance release workflow and changelog configuration
+  ([`83ba464`](https://github.com/MStaniaszek1998/codevid/commit/83ba4646a20428a14f9b73397256d8da19b0eb5b))
+
+
 ## v1.0.1 (2025-12-17)
 
 ### Bug Fixes
