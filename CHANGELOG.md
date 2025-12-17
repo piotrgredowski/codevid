@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.0.3 (2025-12-17)
+
+### Bug Fixes
+
+- Update author name in pyproject.toml and improve temporary file management in pipeline
+  ([`1cfb1ef`](https://github.com/MStaniaszek1998/codevid/commit/1cfb1efb1497942d0da7fbf2dabe248f13bac4c4))
+
+
 ## v1.0.2 (2025-12-17)
 
 ### Bug Fixes
