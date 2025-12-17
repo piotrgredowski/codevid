@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.0.4 (2025-12-17)
+
+### Bug Fixes
+
+- Update CLI options to be optional and improve help descriptions
+  ([`6703ba9`](https://github.com/MStaniaszek1998/codevid/commit/6703ba95adcf103199aa7c6bff50bd1dcc523e62))
+
+
 ## v1.0.3 (2025-12-17)
 
 ### Bug Fixes
