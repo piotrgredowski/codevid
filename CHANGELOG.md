@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.2.1 (2025-12-20)
+
+### Bug Fixes
+
+- Fix the audio sync with the video
+  ([`b8ef815`](https://github.com/MStaniaszek1998/codevid/commit/b8ef8151d79d4b30f24680e173e87d55bb8a5484))
+
+
 ## v1.2.0 (2025-12-19)
 
 ### Documentation
