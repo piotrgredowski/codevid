@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.2.2 (2025-12-21)
+
+### Bug Fixes
+
+- Add Playwright test for complete quote creation flow and improve audio duration handling
+  ([`6dabd3d`](https://github.com/MStaniaszek1998/codevid/commit/6dabd3df89e3297030a99c4b5e67b739d721ec1c))
+
+### Documentation
+
+- Update README to remove old tutorial link
+  ([`2ccdcf4`](https://github.com/MStaniaszek1998/codevid/commit/2ccdcf4569cb0026fd249e7209463be314db92f4))
+
+
 ## v1.2.1 (2025-12-20)
 
 ### Bug Fixes
