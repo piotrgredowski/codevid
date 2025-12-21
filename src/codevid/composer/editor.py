@@ -282,7 +282,173 @@ class VideoComposer:
             resolution=video_size,
             captions_path=captions_path,
         )
-    
+
+    def compose_from_segments(
+        self,
+        segment_videos: list[Path],
+        script: VideoScript,
+        audio_segments: list[Path],
+    ) -> CompositionResult:
+        """Compose final video from pre-recorded segment videos with audio.
+
+        This method is used with segmented recording where each step was
+        recorded in a separate video file. Each segment is composed with
+        its corresponding audio, ensuring perfect sync.
+
+        Args:
+            segment_videos: List of video file paths, one per step.
+            script: The video script with narration.
+            audio_segments: Paths to audio files [intro, seg_0, ..., seg_n, conclusion].
+
+        Returns:
+            CompositionResult with output path and metadata.
+        """
+        from moviepy import AudioFileClip, VideoFileClip, concatenate_videoclips
+
+        final_clips = []
+        opened_clips: list = []
+        audio_durations: list[float] = []
+        video_size: tuple[int, int] | None = None
+
+        # 1. Intro segment (title card + intro audio)
+        intro_duration = 0.0
+        if script.introduction and audio_segments:
+            intro_path = audio_segments[0]
+            if intro_path.exists():
+                intro_audio = AudioFileClip(str(intro_path))
+                opened_clips.append(intro_audio)
+                intro_duration = float(intro_audio.duration)
+
+                # Get video size from first segment
+                if segment_videos:
+                    first_video = VideoFileClip(str(segment_videos[0]))
+                    video_size = (first_video.w, first_video.h)
+                    first_video.close()
+                else:
+                    video_size = (1280, 720)
+
+                intro_clip = self._create_title_card(
+                    script.title, duration=intro_duration, size=video_size
+                )
+                intro_clip = intro_clip.with_audio(intro_audio)
+                final_clips.append(intro_clip)
+                opened_clips.append(intro_clip)
+
+        audio_durations.append(intro_duration)
+
+        # 2. Step segments (video + narration audio)
+        for i, video_path in enumerate(segment_videos):
+            audio_idx = i + 1  # offset by intro
+
+            # Load video segment
+            segment_video = VideoFileClip(str(video_path))
+            opened_clips.append(segment_video)
+
+            if video_size is None:
+                video_size = (segment_video.w, segment_video.h)
+
+            # Get corresponding audio
+            if audio_idx < len(audio_segments) - 1:  # Exclude conclusion
+                audio_path = audio_segments[audio_idx]
+                if audio_path.exists():
+                    segment_audio = AudioFileClip(str(audio_path))
+                    opened_clips.append(segment_audio)
+                    target_duration = float(segment_audio.duration)
+                    audio_durations.append(target_duration)
+
+                    # Adjust video duration to match audio
+                    if segment_video.duration < target_duration:
+                        # Freeze last frame to extend
+                        freeze_duration = target_duration - segment_video.duration
+                        last_frame = segment_video.to_ImageClip(t=-0.01).with_duration(
+                            freeze_duration
+                        )
+                        segment_video = concatenate_videoclips([segment_video, last_frame])
+                    elif segment_video.duration > target_duration:
+                        # Trim video to audio duration
+                        segment_video = segment_video.subclipped(0, target_duration)
+
+                    segment_video = segment_video.with_audio(segment_audio)
+                else:
+                    audio_durations.append(float(segment_video.duration))
+            else:
+                audio_durations.append(float(segment_video.duration))
+
+            final_clips.append(segment_video)
+
+        # 3. Conclusion segment (last frame + conclusion audio)
+        conclusion_duration = 0.0
+        if script.conclusion and len(audio_segments) >= 2:
+            conclusion_path = audio_segments[-1]
+            if conclusion_path.exists():
+                conclusion_audio = AudioFileClip(str(conclusion_path))
+                opened_clips.append(conclusion_audio)
+                conclusion_duration = float(conclusion_audio.duration)
+
+                # Freeze last frame from final segment
+                if final_clips:
+                    last_frame = final_clips[-1].to_ImageClip(t=-0.01).with_duration(
+                        conclusion_duration
+                    )
+                    conclusion_clip = last_frame.with_audio(conclusion_audio)
+                    final_clips.append(conclusion_clip)
+
+        audio_durations.append(conclusion_duration)
+
+        # 4. Concatenate all segments
+        if final_clips:
+            final_video = concatenate_videoclips(final_clips, method="compose")
+        else:
+            raise CompositionError("No video segments to compose")
+
+        # Generate captions
+        captions_path = None
+        if self.config.include_captions and script:
+            captions = self.caption_generator.generate_from_script(
+                script, [], audio_durations  # No markers needed for segmented approach
+            )
+            captions_path = self.config.output_path.with_suffix(".srt")
+            self.caption_generator.export_srt(captions, captions_path)
+
+        # Add watermark if configured
+        if self.config.watermark_path:
+            final_video = self._add_watermark(final_video)
+
+        # Export final video
+        ffmpeg_params: list[str] = []
+        if self.config.codec in {"libx264", "libx265"}:
+            ffmpeg_params.extend(["-preset", self.config.preset, "-crf", str(self.config.crf)])
+        if self.config.pixel_format:
+            ffmpeg_params.extend(["-pix_fmt", self.config.pixel_format])
+        if self.config.faststart and self.config.output_path.suffix.lower() in {".mp4", ".m4v"}:
+            ffmpeg_params.extend(["-movflags", "+faststart"])
+
+        final_video.write_videofile(
+            str(self.config.output_path),
+            fps=self.config.fps,
+            codec=self.config.codec,
+            audio_codec=self.config.audio_codec,
+            bitrate=self.config.bitrate,
+            ffmpeg_params=ffmpeg_params,
+            logger=None,
+        )
+
+        # Clean up
+        final_duration = float(final_video.duration)
+        final_video.close()
+        for clip in opened_clips:
+            try:
+                clip.close()
+            except Exception:
+                pass
+
+        return CompositionResult(
+            output_path=self.config.output_path,
+            duration=final_duration,
+            resolution=video_size or (1280, 720),
+            captions_path=captions_path,
+        )
+
     def _extract_video_segment(
         self, video: Any, start_time: float, end_time: float, target_duration: float
     ) -> Any:

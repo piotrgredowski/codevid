@@ -58,7 +58,8 @@ Write 1-2 sentences explaining this step as if teaching someone.
 Focus on the user's goal, not the technical implementation.
 Do not use technical jargon like "selector" or "element".
 Please make sure that it only contains the narration text without any additional commentary.
-It has to be quick
+Make sure that it sounds like a human wrote it, not a machine. This tutorial will be on youtube and needs to sound natural.
+It cannot be long - it should be short and to the point.
 """
 
 INTRO_GENERATION_PROMPT = """\

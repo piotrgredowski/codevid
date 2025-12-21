@@ -318,28 +318,50 @@ class PlaywrightParser(TestParser):
                 parts.append("{...}")
         return "".join(parts)
 
+    # Locator methods that can be chained
+    LOCATOR_CHAIN_METHODS = {
+        "locator", "get_by_role", "get_by_text", "get_by_label",
+        "get_by_placeholder", "get_by_test_id", "get_by_alt_text",
+    }
+
     def _find_locator_selector(self, node: ast.Call, context: dict[str, str]) -> str | None:
-        """Find selector from chained locator call like page.locator("sel").click()."""
-        # Walk up the chain to find locator() call
+        """Find selector from chained locator call like page.locator("sel").click().
+
+        Handles chains like: page.get_by_text("X").locator("..").click()
+        Returns the full chain expression: "get_by_text('X').locator('..')"
+        """
+        # Collect all locator methods in the chain (in reverse order)
+        chain_parts: list[tuple[str, str]] = []
         current = node.func
+
         while isinstance(current, ast.Attribute):
             if isinstance(current.value, ast.Call):
                 inner_call = current.value
                 inner_method = self._get_method_name(inner_call)
-                if inner_method in ("locator", "get_by_role", "get_by_text",
-                                    "get_by_label", "get_by_placeholder",
-                                    "get_by_test_id", "get_by_alt_text"):
+
+                if inner_method in self.LOCATOR_CHAIN_METHODS:
                     selector = self._get_string_arg(inner_call, 0, context)
                     if selector:
-                        # Include the method for context
-                        if inner_method != "locator":
-                            return f"{inner_method}({selector!r})"
-                        return selector
-                # Continue up the chain
+                        chain_parts.insert(0, (inner_method, selector))
+
+                # Continue up the chain to find more locator methods
                 current = inner_call.func
             else:
                 current = current.value
-        return None
+
+        if not chain_parts:
+            return None
+
+        # Single simple locator: return as before for backwards compatibility
+        if len(chain_parts) == 1:
+            method, selector = chain_parts[0]
+            if method == "locator":
+                return selector
+            return f"{method}({selector!r})"
+
+        # Multiple chain: return full expression
+        # e.g., "get_by_text('Atlas Runner Sneaker').locator('..')"
+        return ".".join(f"{m}({s!r})" for m, s in chain_parts)
 
     def _find_expect_locator(self, node: ast.Call, context: dict[str, str]) -> str | None:
         """Find the locator from an expect() assertion chain."""

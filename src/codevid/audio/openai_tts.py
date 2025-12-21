@@ -75,8 +75,8 @@ class OpenAITTSProvider(TTSProvider):
                 voice=self._voice,
             )
 
-        # Calculate duration
-        duration = self._estimate_duration(text)
+        # Get actual duration from the generated audio file
+        duration = await self._get_audio_duration(output_path)
 
         return AudioSegment(
             path=output_path,
@@ -88,12 +88,21 @@ class OpenAITTSProvider(TTSProvider):
         """List available OpenAI TTS voices."""
         return self.VOICES.copy()
 
-    def _estimate_duration(self, text: str) -> float:
-        """Estimate audio duration based on text length and speed.
+    async def _get_audio_duration(self, audio_path: Path) -> float:
+        """Get the actual duration of an audio file in seconds."""
+        try:
+            from mutagen.mp3 import MP3
 
-        OpenAI TTS speaks at approximately 150 words per minute at 1.0 speed.
-        """
-        words = len(text.split())
-        words_per_minute = 150 * self._speed
-        duration = (words / words_per_minute) * 60
-        return max(0.5, duration)  # Minimum 0.5 seconds
+            audio = MP3(str(audio_path))
+            return audio.info.length
+        except ImportError:
+            # Fall back to estimating from file size (~128kbps)
+            file_size = audio_path.stat().st_size
+            return file_size / (128 * 1024 / 8)
+        except Exception:
+            # Ultimate fallback: estimate based on text length
+            return self._estimate_duration_fallback()
+
+    def _estimate_duration_fallback(self) -> float:
+        """Fallback duration estimation (only used if file reading fails)."""
+        return 3.0  # Default fallback

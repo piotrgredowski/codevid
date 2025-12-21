@@ -7,7 +7,6 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from codevid import __version__
 from codevid.config import load_config
@@ -188,18 +187,11 @@ def _run_preview(
         tts=None,
     )
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Generating preview...", total=100)
+    def on_progress(percent: int, message: str) -> None:
+        console.print(f"[dim][{percent:3d}%][/dim] {message or 'Working...'}")
 
-        def on_progress(percent: int, message: str) -> None:
-            progress.update(task, completed=percent, description=message or "Working...")
-
-        pipeline.on_progress(on_progress)
-        result = pipeline.run()
+    pipeline.on_progress(on_progress)
+    result = pipeline.run()
 
     if result.success:
         console.print("\n[green]Script preview complete.[/green]")
@@ -240,18 +232,11 @@ def _run_generate(
         tts=tts_provider,
     )
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Starting pipeline...", total=100)
+    def on_progress(percent: int, message: str) -> None:
+        console.print(f"[dim][{percent:3d}%][/dim] {message or 'Working...'}")
 
-        def on_progress(percent: int, message: str) -> None:
-            progress.update(task, completed=percent, description=message or "Working...")
-
-        pipeline.on_progress(on_progress)
-        result = pipeline.run()
+    pipeline.on_progress(on_progress)
+    result = pipeline.run()
 
     if result.success and result.output_path:
         console.print(f"\n[green]Video saved to:[/green] {result.output_path}")

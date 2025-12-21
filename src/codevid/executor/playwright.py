@@ -137,7 +137,11 @@ class PlaywrightExecutor:
                     if delay > 0:
                         await asyncio.sleep(delay)
 
-                    # Mark step end (always, for video composition timing)
+                    # Safety Buffer: Add a gap between steps for visual stabilization
+                    # This is included in the step duration for accurate audio-video sync
+                    await asyncio.sleep(0.5)
+
+                    # Mark step end AFTER the safety buffer (for accurate composition timing)
                     step_end_time = time.time() - start_time
                     if recorder and recorder.is_recording:
                         marker = recorder.mark_event(
@@ -154,10 +158,6 @@ class PlaywrightExecutor:
                         )
                     markers.append(marker)
 
-                    # Safety Buffer: Add a gap between steps to prevent video bleed
-                    # This time will be excluded from the final video segments
-                    await asyncio.sleep(0.5)
-
             finally:
                 if self._page:
                     try:
@@ -173,6 +173,124 @@ class PlaywrightExecutor:
                 await self._browser.close()
 
         return markers, recorded_video
+
+    async def execute_segmented(
+        self,
+        test: ParsedTest,
+        on_step: Callable[[int, TestStep], None] | None = None,
+    ) -> list[Path]:
+        """Execute test step-by-step, recording each segment separately.
+
+        Each step is recorded in a separate browser context with video recording.
+        State (cookies, localStorage) is persisted between steps using storage_state.
+
+        Args:
+            test: The parsed test to execute.
+            on_step: Optional callback called before each step.
+
+        Returns:
+            List of video file paths, one per step.
+        """
+        if not self.config.record_video_dir:
+            raise ExecutorError("record_video_dir must be set for segmented recording")
+
+        segment_videos: list[Path] = []
+        state_file = self.config.record_video_dir / "state.json"
+        current_url: str | None = None
+
+        # Ensure segment directories exist
+        self.config.record_video_dir.mkdir(parents=True, exist_ok=True)
+
+        async with async_playwright() as p:
+            browser_launcher = getattr(p, self.config.browser_type)
+            browser = await browser_launcher.launch(
+                headless=self.config.headless,
+                slow_mo=self.config.slow_mo,
+            )
+
+            for i, step in enumerate(test.steps):
+                # Notify callback
+                if on_step:
+                    on_step(i, step)
+
+                # Create directory for this step's video
+                step_video_dir = self.config.record_video_dir / f"step_{i}"
+                step_video_dir.mkdir(parents=True, exist_ok=True)
+
+                # Build context kwargs with video recording
+                context_kwargs: dict[str, object] = {
+                    "viewport": {
+                        "width": self.config.viewport_width,
+                        "height": self.config.viewport_height,
+                    },
+                    "record_video_dir": str(step_video_dir),
+                }
+
+                if self.config.device_scale_factor is not None:
+                    context_kwargs["device_scale_factor"] = self.config.device_scale_factor
+
+                if self.config.record_video_size:
+                    w, h = self.config.record_video_size
+                    context_kwargs["record_video_size"] = {"width": w, "height": h}
+
+                # Restore state from previous step if available
+                if state_file.exists():
+                    context_kwargs["storage_state"] = str(state_file)
+
+                # Create new context with video recording
+                context = await browser.new_context(**context_kwargs)
+                page = await context.new_page()
+                self._page = page
+
+                try:
+                    # Navigate to last known URL for state continuity
+                    # (skip if this step is a navigation itself)
+                    if current_url and step.action != ActionType.NAVIGATE:
+                        try:
+                            await page.goto(current_url, wait_until="domcontentloaded")
+                        except Exception:
+                            pass  # URL may have changed, continue anyway
+
+                    # Execute the step
+                    await self._execute_step(step)
+
+                    # Wait for page to stabilize (animations, network requests)
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=3000)
+                    except Exception:
+                        pass  # Timeout is fine, just continue
+
+                    # Visual stabilization delay
+                    await asyncio.sleep(1.0)
+
+                    # Save current URL and state for next step
+                    current_url = page.url
+                    await context.storage_state(path=str(state_file))
+
+                finally:
+                    # Close page to finalize video
+                    video_path: Path | None = None
+                    try:
+                        if page.video:
+                            video_path = Path(await page.video.path())
+                        await page.close()
+                    except Exception:
+                        pass
+
+                    await context.close()
+
+                    # Find the recorded video file
+                    if video_path and video_path.exists():
+                        segment_videos.append(video_path)
+                    else:
+                        # Fallback: search for video in directory
+                        video_files = list(step_video_dir.glob("*.webm"))
+                        if video_files:
+                            segment_videos.append(video_files[0])
+
+            await browser.close()
+
+        return segment_videos
 
     async def _execute_step(self, step: TestStep) -> None:
         """Execute a single test step."""
@@ -230,7 +348,12 @@ class PlaywrightExecutor:
 
     def _get_locator(self, page: Page, target: str):
         """Get a Playwright locator from a target string."""
-        # Handle get_by_* patterns from parsed code
+        # Handle chained locator expressions like:
+        # "get_by_text('X').locator('..')" or "locator('#a').get_by_role('button')"
+        if ").locator(" in target or ").get_by_" in target:
+            return self._eval_locator_chain(page, target)
+
+        # Handle simple get_by_* patterns from parsed code
         if target.startswith("get_by_role"):
             match = re.match(r"get_by_role\('([^']+)'", target)
             if match:
@@ -247,13 +370,42 @@ class PlaywrightExecutor:
             match = re.match(r"get_by_placeholder\('([^']+)'", target)
             if match:
                 return page.get_by_placeholder(match.group(1))
-        
+
         # Handle explicit xpath selector
         if target.startswith("xpath="):
             return page.locator(target)
 
         # Default: use as CSS selector
         return page.locator(target)
+
+    def _eval_locator_chain(self, page: Page, expr: str):
+        """Evaluate a chained locator expression.
+
+        Handles chains like: "get_by_text('X').locator('..')"
+        """
+        result = page
+
+        # Parse method calls from the expression
+        # Match patterns like: method_name('argument')
+        calls = re.findall(r"(\w+)\('([^']+)'\)", expr)
+
+        for method, arg in calls:
+            if method == "locator":
+                result = result.locator(arg)
+            elif method == "get_by_text":
+                result = result.get_by_text(arg)
+            elif method == "get_by_role":
+                result = result.get_by_role(arg)
+            elif method == "get_by_label":
+                result = result.get_by_label(arg)
+            elif method == "get_by_placeholder":
+                result = result.get_by_placeholder(arg)
+            elif method == "get_by_test_id":
+                result = result.get_by_test_id(arg)
+            elif method == "get_by_alt_text":
+                result = result.get_by_alt_text(arg)
+
+        return result
 
     async def _execute_wait(self, step: TestStep) -> None:
         """Execute a wait step."""

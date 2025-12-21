@@ -38,6 +38,7 @@ dependencies = [
     "pyyaml>=6.0",
     # Demo app
     "flask>=3.0.0",
+    "pytest>=9.0.2",
 ]
 
 [project.optional-dependencies]

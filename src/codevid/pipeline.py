@@ -86,6 +86,12 @@ class Pipeline:
             # Step 2: Generate script with LLM
             self._report_progress(15, "Generating narration script...")
             script = await self._generate_script(parsed_test)
+            with open(self.config.output.parent / "generated_script.txt", "w") as f:
+                f.write(f"Title: {script.title}\n\n")
+                f.write(f"Introduction:\n{script.introduction}\n\n")
+                for i, segment in enumerate(script.segments):
+                    f.write(f"Segment {i} (Step {segment.step_index}):\n{segment.text}\n\n")
+                f.write(f"Conclusion:\n{script.conclusion}\n")
             self._report_progress(25, "Script generated")
 
             # Preview mode stops here
