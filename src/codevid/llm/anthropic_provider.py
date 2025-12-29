@@ -140,13 +140,20 @@ class AnthropicProvider(LLMProvider):
         )
 
     def _create_default_segments(self, test: ParsedTest) -> list[NarrationSegment]:
-        """Create default narration segments from test steps."""
+        """Create default narration segments from test steps.
+
+        Skips steps marked with skip_recording=True but preserves original
+        step indices for EventMarker synchronization.
+        """
         segments = []
         for i, step in enumerate(test.steps):
+            # Skip steps marked for skip_recording
+            if step.skip_recording:
+                continue
             segments.append(
                 NarrationSegment(
                     text=step.description or f"Perform {step.action.value} action",
-                    step_index=i,
+                    step_index=i,  # Use original index for sync
                     timing_hint=3.0,
                 )
             )

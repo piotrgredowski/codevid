@@ -33,6 +33,16 @@ class ExecutorConfig:
     record_video_size: tuple[int, int] | None = None  # Defaults to viewport size
 
 
+@dataclass
+class PhasedExecutionResult:
+    """Result of phased test execution."""
+
+    markers: list[EventMarker]
+    video_path: Path | None
+    setup_successful: bool = True
+    teardown_successful: bool = True
+
+
 class PlaywrightExecutor:
     """Execute parsed Playwright tests with recording integration."""
 
@@ -291,6 +301,283 @@ class PlaywrightExecutor:
             await browser.close()
 
         return segment_videos
+
+    async def execute_phased(
+        self,
+        test: ParsedTest,
+        on_step: Callable[[int, TestStep], None] | None = None,
+    ) -> PhasedExecutionResult:
+        """Execute test in phases: setup (no recording) -> main (recording) -> teardown.
+
+        Uses browser storage_state to persist session between contexts.
+        Steps marked with skip_recording=True at the beginning run in setup phase,
+        at the end run in teardown phase, and the middle section is recorded.
+
+        Args:
+            test: The parsed test to execute.
+            on_step: Optional callback called before each step with (index, step).
+
+        Returns:
+            PhasedExecutionResult with markers, video path, and phase success flags.
+        """
+        if not self.config.record_video_dir:
+            raise ExecutorError("record_video_dir must be set for phased execution")
+
+        self.config.record_video_dir.mkdir(parents=True, exist_ok=True)
+        state_file = self.config.record_video_dir / "session_state.json"
+
+        setup_steps = test.get_setup_steps()
+        recorded_steps = test.get_recorded_steps()
+        teardown_steps = test.get_teardown_steps()
+
+        markers: list[EventMarker] = []
+        video_path: Path | None = None
+        current_url: str | None = None
+        setup_successful = True
+        teardown_successful = True
+
+        async with async_playwright() as p:
+            browser_launcher = getattr(p, self.config.browser_type)
+            browser = await browser_launcher.launch(
+                headless=self.config.headless,
+                slow_mo=self.config.slow_mo,
+            )
+
+            try:
+                # PHASE 1: Setup (no recording)
+                if setup_steps:
+                    try:
+                        current_url = await self._execute_setup_phase(
+                            browser, setup_steps, state_file, on_step
+                        )
+                    except Exception as e:
+                        setup_successful = False
+                        raise ExecutorError(f"Setup phase failed: {e}")
+
+                # PHASE 2: Recording
+                if recorded_steps:
+                    markers, video_path, current_url = await self._execute_recording_phase(
+                        browser,
+                        test,
+                        recorded_steps,
+                        state_file if setup_steps else None,
+                        current_url,
+                        on_step,
+                        step_offset=len(setup_steps),
+                    )
+
+                # PHASE 3: Teardown (no recording)
+                if teardown_steps:
+                    try:
+                        await self._execute_teardown_phase(
+                            browser,
+                            teardown_steps,
+                            state_file,
+                            current_url,
+                            on_step,
+                            step_offset=len(setup_steps) + len(recorded_steps),
+                        )
+                    except Exception:
+                        teardown_successful = False
+                        # Don't raise - teardown failure shouldn't fail the whole process
+
+            finally:
+                await browser.close()
+                # Cleanup state file
+                if state_file.exists():
+                    state_file.unlink()
+
+        return PhasedExecutionResult(
+            markers=markers,
+            video_path=video_path,
+            setup_successful=setup_successful,
+            teardown_successful=teardown_successful,
+        )
+
+    async def _execute_setup_phase(
+        self,
+        browser: Browser,
+        steps: list[TestStep],
+        state_file: Path,
+        on_step: Callable[[int, TestStep], None] | None,
+    ) -> str | None:
+        """Execute setup steps without recording, save state for next phase.
+
+        Returns the current URL after setup completes.
+        """
+        context_kwargs: dict[str, object] = {
+            "viewport": {
+                "width": self.config.viewport_width,
+                "height": self.config.viewport_height,
+            }
+        }
+        if self.config.device_scale_factor is not None:
+            context_kwargs["device_scale_factor"] = self.config.device_scale_factor
+
+        # NO record_video_dir for setup phase
+        context = await browser.new_context(**context_kwargs)
+        page = await context.new_page()
+        self._page = page
+
+        try:
+            for i, step in enumerate(steps):
+                if on_step:
+                    on_step(i, step)
+                await self._execute_step(step)
+                await asyncio.sleep(0.3)  # Small delay for stability
+
+            # Save state for recording phase
+            current_url = page.url
+            await context.storage_state(path=str(state_file))
+            return current_url
+        finally:
+            await page.close()
+            await context.close()
+
+    async def _execute_recording_phase(
+        self,
+        browser: Browser,
+        test: ParsedTest,
+        steps: list[TestStep],
+        state_file: Path | None,
+        initial_url: str | None,
+        on_step: Callable[[int, TestStep], None] | None,
+        step_offset: int = 0,
+    ) -> tuple[list[EventMarker], Path | None, str | None]:
+        """Execute main recording phase with video recording enabled.
+
+        Returns (markers, video_path, current_url).
+        """
+        context_kwargs: dict[str, object] = {
+            "viewport": {
+                "width": self.config.viewport_width,
+                "height": self.config.viewport_height,
+            },
+            "record_video_dir": str(self.config.record_video_dir),
+        }
+        if self.config.device_scale_factor is not None:
+            context_kwargs["device_scale_factor"] = self.config.device_scale_factor
+        if self.config.record_video_size:
+            w, h = self.config.record_video_size
+            context_kwargs["record_video_size"] = {"width": w, "height": h}
+
+        # Restore state from setup phase
+        if state_file and state_file.exists():
+            context_kwargs["storage_state"] = str(state_file)
+
+        context = await browser.new_context(**context_kwargs)
+        page = await context.new_page()
+        self._page = page
+
+        # Navigate to last known URL if we have state
+        if initial_url:
+            try:
+                await page.goto(initial_url, wait_until="domcontentloaded")
+            except Exception:
+                pass  # Continue even if navigation fails
+
+        markers: list[EventMarker] = []
+        video_path: Path | None = None
+        start_time = time.time()
+        current_url: str | None = None
+
+        try:
+            for i, step in enumerate(steps):
+                # Get original index in the full test for marker synchronization
+                original_index = test.get_step_original_index(step)
+
+                if on_step:
+                    on_step(original_index, step)
+
+                # For steps marked skip in the middle, execute with minimal delay, no markers
+                if step.skip_recording:
+                    await self._execute_step(step)
+                    await asyncio.sleep(0.3)
+                    continue
+
+                # Mark step start
+                step_start_time = time.time() - start_time
+                markers.append(EventMarker(
+                    timestamp=step_start_time,
+                    event_type="step_start",
+                    metadata={
+                        "index": original_index,
+                        "action": step.action.value,
+                        "target": step.target,
+                        "description": step.description,
+                    },
+                ))
+
+                await self._execute_step(step)
+
+                # Get step delay (use position within recorded steps, not original index)
+                delay = self._get_step_delay(original_index)
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                await asyncio.sleep(0.5)  # Safety buffer
+
+                # Mark step end
+                step_end_time = time.time() - start_time
+                markers.append(EventMarker(
+                    timestamp=step_end_time,
+                    event_type="step_end",
+                    metadata={"index": original_index},
+                ))
+
+            current_url = page.url
+        finally:
+            try:
+                if page.video:
+                    video_path = Path(await page.video.path())
+                await page.close()
+            except Exception:
+                pass
+            await context.close()
+
+        return markers, video_path, current_url
+
+    async def _execute_teardown_phase(
+        self,
+        browser: Browser,
+        steps: list[TestStep],
+        state_file: Path,
+        initial_url: str | None,
+        on_step: Callable[[int, TestStep], None] | None,
+        step_offset: int = 0,
+    ) -> None:
+        """Execute teardown steps without recording."""
+        context_kwargs: dict[str, object] = {
+            "viewport": {
+                "width": self.config.viewport_width,
+                "height": self.config.viewport_height,
+            }
+        }
+        if self.config.device_scale_factor is not None:
+            context_kwargs["device_scale_factor"] = self.config.device_scale_factor
+
+        # Restore state from recording phase
+        if state_file.exists():
+            context_kwargs["storage_state"] = str(state_file)
+
+        context = await browser.new_context(**context_kwargs)
+        page = await context.new_page()
+        self._page = page
+
+        if initial_url:
+            try:
+                await page.goto(initial_url, wait_until="domcontentloaded")
+            except Exception:
+                pass
+
+        try:
+            for i, step in enumerate(steps):
+                if on_step:
+                    on_step(step_offset + i, step)
+                await self._execute_step(step)
+                await asyncio.sleep(0.3)
+        finally:
+            await page.close()
+            await context.close()
 
     async def _execute_step(self, step: TestStep) -> None:
         """Execute a single test step."""

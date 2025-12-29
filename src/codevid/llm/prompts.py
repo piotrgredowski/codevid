@@ -100,10 +100,25 @@ Keep it positive and encouraging.
 """
 
 
-def format_steps_for_prompt(steps: list) -> str:
-    """Format test steps for inclusion in prompts."""
+def format_steps_for_prompt(steps: list, include_skipped: bool = False) -> str:
+    """Format test steps for inclusion in prompts.
+
+    Args:
+        steps: List of TestStep objects.
+        include_skipped: If True, include steps marked for skip_recording.
+                        Defaults to False (filter out skipped steps).
+
+    Returns:
+        Formatted string with numbered steps for LLM consumption.
+        Note: Uses original step indices to maintain synchronization with
+        EventMarkers during video composition.
+    """
     lines = []
-    for i, step in enumerate(steps, 1):
+    for i, step in enumerate(steps):
+        # Skip steps marked for skip_recording unless explicitly included
+        if not include_skipped and getattr(step, "skip_recording", False):
+            continue
         value_str = f" with value '{step.value}'" if step.value else ""
-        lines.append(f"{i}. {step.action.value.upper()}: {step.target}{value_str}")
+        # Use original index (0-based in output, matching step_index in segments)
+        lines.append(f"Step {i}: {step.action.value.upper()}: {step.target}{value_str}")
     return "\n".join(lines)

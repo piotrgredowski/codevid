@@ -109,7 +109,7 @@ class Pipeline:
 
             # Step 3.5: Calculate per-step delays from audio durations
             step_delays = self._calculate_step_delays(
-                script, audio_segments, num_steps=len(parsed_test.steps)
+                script, audio_segments, num_steps=len(parsed_test.steps), test=parsed_test
             )
 
             # Step 4: Run test with recording (audio-synchronized timing)
@@ -199,17 +199,19 @@ class Pipeline:
         script: VideoScript,
         audio_segments: list[AudioSegment],
         num_steps: int,
+        test: ParsedTest | None = None,
         min_delay: float = 0.5,
     ) -> list[float]:
         """Calculate per-step delays based on audio segment durations.
 
         Maps narration audio durations to test steps so each step waits
-        for its narration to complete.
+        for its narration to complete. Skipped steps get minimal delay.
 
         Args:
             script: The video script with segment-to-step mapping.
             audio_segments: Audio segments [intro, segment_0, ..., conclusion].
             num_steps: Total number of test steps.
+            test: Optional parsed test to check skip_recording flags.
             min_delay: Minimum delay per step regardless of audio.
 
         Returns:
@@ -230,9 +232,13 @@ class Pipeline:
         # Generate delays for all steps
         delays: list[float] = []
         for step_idx in range(num_steps):
-            audio_duration = step_durations.get(step_idx, 0.0)
-            # Step delay should be at least audio duration, but not less than min_delay
-            delays.append(max(audio_duration, min_delay))
+            # Skipped steps get minimal delay (just for execution stability)
+            if test and step_idx < len(test.steps) and test.steps[step_idx].skip_recording:
+                delays.append(0.3)
+            else:
+                audio_duration = step_durations.get(step_idx, 0.0)
+                # Step delay should be at least audio duration, but not less than min_delay
+                delays.append(max(audio_duration, min_delay))
 
         return delays
 
@@ -242,6 +248,11 @@ class Pipeline:
         step_delays: list[float] | None = None,
     ) -> tuple[Path, list[EventMarker]]:
         """Execute test while recording screen.
+
+        If the test has skip markers, uses phased execution:
+        - Setup phase: execute skipped steps at beginning (no recording)
+        - Recording phase: execute main steps (with recording)
+        - Teardown phase: execute skipped steps at end (no recording)
 
         Args:
             test: The parsed test to execute.
@@ -274,19 +285,40 @@ class Pipeline:
         executor = PlaywrightExecutor(executor_config)
 
         total_steps = len(test.steps)
-        markers, video_path = await executor.execute(
-            test,
-            recorder=None,
-            on_step=lambda i, step: self._report_progress(
-                50 + int(25 * i / max(total_steps, 1)),
-                f"Executing step {i + 1}/{total_steps}: {step.description}",
-            ),
-        )
 
-        if video_path is None:
-            raise PipelineError("Playwright did not produce a video file")
+        # Use phased execution if skip markers are present
+        if test.has_skip_markers():
+            setup_count = len(test.get_setup_steps())
+            if setup_count > 0:
+                self._report_progress(50, f"Executing {setup_count} setup steps (not recorded)...")
 
-        return video_path, markers
+            result = await executor.execute_phased(
+                test,
+                on_step=lambda i, step: self._report_progress(
+                    50 + int(25 * i / max(total_steps, 1)),
+                    f"Executing step {i + 1}/{total_steps}: {step.description}",
+                ),
+            )
+
+            if result.video_path is None:
+                raise PipelineError("Playwright did not produce a video file")
+
+            return result.video_path, result.markers
+        else:
+            # Original behavior for tests without skip markers
+            markers, video_path = await executor.execute(
+                test,
+                recorder=None,
+                on_step=lambda i, step: self._report_progress(
+                    50 + int(25 * i / max(total_steps, 1)),
+                    f"Executing step {i + 1}/{total_steps}: {step.description}",
+                ),
+            )
+
+            if video_path is None:
+                raise PipelineError("Playwright did not produce a video file")
+
+            return video_path, markers
 
     def _compose_video(
         self,

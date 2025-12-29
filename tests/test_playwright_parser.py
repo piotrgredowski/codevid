@@ -233,3 +233,205 @@ class TestParserRegistry:
             get_parser(unknown_file)
 
         assert "No parser found" in str(exc_info.value)
+
+
+class TestSkipMarkers:
+    """Tests for skip recording markers (# codevid: skip)."""
+
+    @pytest.fixture
+    def parser(self) -> PlaywrightParser:
+        return PlaywrightParser()
+
+    def test_parse_block_skip_markers(self, parser: PlaywrightParser, tmp_path: Path):
+        """Test that block skip markers correctly mark steps."""
+        test_file = tmp_path / "test_skip_block.py"
+        test_file.write_text('''
+from playwright.sync_api import Page
+
+def test_with_skip_block(page: Page):
+    # codevid: skip-start
+    page.goto("https://example.com/login")
+    page.fill("#username", "admin")
+    page.click("#login")
+    # codevid: skip-end
+    page.click("#main-content")
+    page.fill("#form", "data")
+''')
+        result = parser.parse(test_file)
+
+        assert len(result.steps) == 5
+        # First 3 steps should be marked as skip
+        assert result.steps[0].skip_recording is True
+        assert result.steps[1].skip_recording is True
+        assert result.steps[2].skip_recording is True
+        # Last 2 steps should NOT be skipped
+        assert result.steps[3].skip_recording is False
+        assert result.steps[4].skip_recording is False
+
+    def test_parse_inline_skip_marker(self, parser: PlaywrightParser, tmp_path: Path):
+        """Test that inline skip markers correctly mark single steps."""
+        test_file = tmp_path / "test_skip_inline.py"
+        test_file.write_text('''
+from playwright.sync_api import Page
+
+def test_with_inline_skip(page: Page):
+    page.goto("https://example.com")
+    page.fill("#password", "secret")  # codevid: skip
+    page.click("#submit")
+''')
+        result = parser.parse(test_file)
+
+        assert len(result.steps) == 3
+        assert result.steps[0].skip_recording is False  # goto
+        assert result.steps[1].skip_recording is True   # fill with skip marker
+        assert result.steps[2].skip_recording is False  # click
+
+    def test_parse_no_skip_markers(self, parser: PlaywrightParser, tmp_path: Path):
+        """Test that files without skip markers have all steps with skip_recording=False."""
+        test_file = tmp_path / "test_no_skip.py"
+        test_file.write_text('''
+from playwright.sync_api import Page
+
+def test_without_skip(page: Page):
+    page.goto("https://example.com")
+    page.click("#button")
+''')
+        result = parser.parse(test_file)
+
+        assert len(result.steps) == 2
+        assert all(not step.skip_recording for step in result.steps)
+        assert result.has_skip_markers() is False
+
+    def test_has_skip_markers(self, parser: PlaywrightParser, tmp_path: Path):
+        """Test the has_skip_markers() method on ParsedTest."""
+        test_file = tmp_path / "test_has_skip.py"
+        test_file.write_text('''
+from playwright.sync_api import Page
+
+def test_with_skip(page: Page):
+    page.goto("https://example.com")  # codevid: skip
+    page.click("#button")
+''')
+        result = parser.parse(test_file)
+
+        assert result.has_skip_markers() is True
+
+    def test_get_setup_steps(self, parser: PlaywrightParser, tmp_path: Path):
+        """Test get_setup_steps() returns contiguous skipped steps at beginning."""
+        test_file = tmp_path / "test_setup.py"
+        test_file.write_text('''
+from playwright.sync_api import Page
+
+def test_with_setup(page: Page):
+    # codevid: skip-start
+    page.goto("https://example.com/login")
+    page.fill("#user", "admin")
+    page.click("#login")
+    # codevid: skip-end
+    page.click("#main")
+    page.fill("#form", "data")
+''')
+        result = parser.parse(test_file)
+
+        setup = result.get_setup_steps()
+        assert len(setup) == 3
+        assert all(step.skip_recording for step in setup)
+
+    def test_get_recorded_steps(self, parser: PlaywrightParser, tmp_path: Path):
+        """Test get_recorded_steps() returns steps between first and last non-skipped."""
+        test_file = tmp_path / "test_recorded.py"
+        test_file.write_text('''
+from playwright.sync_api import Page
+
+def test_with_recorded(page: Page):
+    # codevid: skip-start
+    page.goto("https://example.com/login")
+    page.fill("#user", "admin")
+    # codevid: skip-end
+    page.click("#main")
+    page.fill("#form", "data")
+''')
+        result = parser.parse(test_file)
+
+        recorded = result.get_recorded_steps()
+        assert len(recorded) == 2
+        assert all(not step.skip_recording for step in recorded)
+
+    def test_get_teardown_steps(self, parser: PlaywrightParser, tmp_path: Path):
+        """Test get_teardown_steps() returns contiguous skipped steps at end."""
+        test_file = tmp_path / "test_teardown.py"
+        test_file.write_text('''
+from playwright.sync_api import Page
+
+def test_with_teardown(page: Page):
+    page.goto("https://example.com")
+    page.click("#main")
+    # codevid: skip-start
+    page.click("#logout")
+    page.wait_for_load_state("networkidle")
+    # codevid: skip-end
+''')
+        result = parser.parse(test_file)
+
+        teardown = result.get_teardown_steps()
+        assert len(teardown) == 2
+        assert all(step.skip_recording for step in teardown)
+
+    def test_mixed_setup_and_teardown(self, parser: PlaywrightParser, tmp_path: Path):
+        """Test file with both setup and teardown skipped steps."""
+        test_file = tmp_path / "test_mixed.py"
+        test_file.write_text('''
+from playwright.sync_api import Page
+
+def test_mixed(page: Page):
+    # codevid: skip-start
+    page.goto("https://example.com/login")
+    page.fill("#user", "admin")
+    # codevid: skip-end
+    page.click("#main")
+    page.fill("#form", "data")
+    # codevid: skip-start
+    page.click("#logout")
+    # codevid: skip-end
+''')
+        result = parser.parse(test_file)
+
+        setup = result.get_setup_steps()
+        recorded = result.get_recorded_steps()
+        teardown = result.get_teardown_steps()
+
+        assert len(setup) == 2
+        assert len(recorded) == 2
+        assert len(teardown) == 1
+
+    def test_all_steps_skipped(self, parser: PlaywrightParser, tmp_path: Path):
+        """Test when all steps are skipped."""
+        test_file = tmp_path / "test_all_skipped.py"
+        test_file.write_text('''
+from playwright.sync_api import Page
+
+def test_all_skipped(page: Page):
+    # codevid: skip-start
+    page.goto("https://example.com")
+    page.click("#button")
+    # codevid: skip-end
+''')
+        result = parser.parse(test_file)
+
+        assert result.has_skip_markers() is True
+        assert len(result.get_recorded_steps()) == 0
+
+    def test_codevid_skip_without_space(self, parser: PlaywrightParser, tmp_path: Path):
+        """Test that codevid:skip (without space) also works."""
+        test_file = tmp_path / "test_no_space.py"
+        test_file.write_text('''
+from playwright.sync_api import Page
+
+def test_no_space(page: Page):
+    page.fill("#secret", "password")  #codevid:skip
+    page.click("#submit")
+''')
+        result = parser.parse(test_file)
+
+        assert result.steps[0].skip_recording is True
+        assert result.steps[1].skip_recording is False

@@ -1,10 +1,20 @@
 """Parser for Playwright Python tests."""
 
 import ast
+import io
+import tokenize
 from pathlib import Path
+from typing import NamedTuple
 
 from codevid.models import ActionType, ParsedTest, TestStep
 from codevid.parsers.base import ParseError, TestParser
+
+
+class SkipRegion(NamedTuple):
+    """A region of lines that should be skipped from recording."""
+
+    start_line: int
+    end_line: int
 
 
 class PlaywrightParser(TestParser):
@@ -68,6 +78,58 @@ class PlaywrightParser(TestParser):
         "scroll_into_view_if_needed", "screenshot", "set_input_files",
     }
 
+    # Skip marker patterns
+    SKIP_START_MARKERS = {"codevid: skip-start", "codevid:skip-start"}
+    SKIP_END_MARKERS = {"codevid: skip-end", "codevid:skip-end"}
+    SKIP_INLINE_MARKERS = {"codevid: skip", "codevid:skip"}
+
+    def _extract_skip_regions(self, source: str) -> list[SkipRegion]:
+        """Extract line ranges marked for skip using tokenize.
+
+        Detects both block markers (skip-start/skip-end) and inline markers (skip).
+        Returns a list of SkipRegion tuples indicating which lines should be skipped.
+        """
+        regions: list[SkipRegion] = []
+        block_start: int | None = None
+
+        try:
+            tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+            for tok in tokens:
+                if tok.type == tokenize.COMMENT:
+                    comment_text = tok.string.lstrip("#").strip().lower()
+                    line_no = tok.start[0]
+
+                    # Check for block start
+                    if any(marker in comment_text for marker in self.SKIP_START_MARKERS):
+                        block_start = line_no
+
+                    # Check for block end
+                    elif any(marker in comment_text for marker in self.SKIP_END_MARKERS):
+                        if block_start is not None:
+                            regions.append(SkipRegion(block_start, line_no))
+                            block_start = None
+
+                    # Check for inline skip marker
+                    elif any(marker in comment_text for marker in self.SKIP_INLINE_MARKERS):
+                        # Inline marker applies to the same line
+                        regions.append(SkipRegion(line_no, line_no))
+
+        except tokenize.TokenError:
+            pass  # Gracefully handle malformed files
+
+        return regions
+
+    def _is_line_in_skip_region(
+        self,
+        line_number: int,
+        skip_regions: list[SkipRegion],
+    ) -> bool:
+        """Check if a line falls within any skip region."""
+        for region in skip_regions:
+            if region.start_line <= line_number <= region.end_line:
+                return True
+        return False
+
     @property
     def framework_name(self) -> str:
         return "playwright"
@@ -102,6 +164,9 @@ class PlaywrightParser(TestParser):
         except Exception as e:
             raise ParseError(f"Failed to read file: {e}", file_path)
 
+        # Extract skip regions BEFORE AST parsing (AST doesn't preserve comments)
+        skip_regions = self._extract_skip_regions(source)
+
         try:
             tree = ast.parse(source, filename=str(path))
         except SyntaxError as e:
@@ -117,6 +182,12 @@ class PlaywrightParser(TestParser):
         test_func = test_functions[0]
         steps = self._extract_steps(test_func, source)
 
+        # Apply skip markers to steps based on their line numbers
+        for step in steps:
+            step.skip_recording = self._is_line_in_skip_region(
+                step.line_number, skip_regions
+            )
+
         # Extract test metadata
         test_name = test_func.name
         docstring = ast.get_docstring(test_func) or ""
@@ -131,6 +202,7 @@ class PlaywrightParser(TestParser):
                 "docstring": docstring,
                 "is_async": isinstance(test_func, ast.AsyncFunctionDef),
                 "function_count": len(test_functions),
+                "has_skip_markers": len(skip_regions) > 0,
             },
         )
 

@@ -29,8 +29,11 @@ class SimpleLLM(LLMProvider):
             "We'll start with the goal, then walk through each action and the expected result."
         )
 
-        # Build a quick roadmap of steps for the overview segment
-        step_summaries = [self._step_to_text(step) for step in test.steps]
+        # Filter out skipped steps for narration, but keep track of original indices
+        recorded_steps = [(idx, step) for idx, step in enumerate(test.steps) if not step.skip_recording]
+
+        # Build a quick roadmap of steps for the overview segment (only recorded steps)
+        step_summaries = [self._step_to_text(step) for _, step in recorded_steps]
         roadmap = " ".join(f"Step {i + 1}: {text}" for i, text in enumerate(step_summaries))
 
         segments = []
@@ -41,11 +44,12 @@ class SimpleLLM(LLMProvider):
                 timing_hint=4.0,
             )
         )
-        for idx, step in enumerate(test.steps):
-            text = f"Step {idx + 1}: {self._step_to_text(step)}"
+        # Create segments for non-skipped steps, using original indices for synchronization
+        for original_idx, step in recorded_steps:
+            text = f"Step {original_idx + 1}: {self._step_to_text(step)}"
             segments.append(
                 NarrationSegment(
-                    step_index=idx,
+                    step_index=original_idx,  # Use original index for EventMarker sync
                     text=text,
                     timing_hint=2.5,
                 )
