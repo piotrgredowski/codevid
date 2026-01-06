@@ -51,6 +51,16 @@ class TTSConfig:
 
 
 @dataclass
+class BlockPauseConfig:
+    """Configuration for extra pauses after logical blocks."""
+
+    enabled: bool = True
+    navigation: float = 1.5  # After page navigation
+    form_submit: float = 1.2  # After form submission clicks
+    assertion: float = 0.8  # After assertion/validation steps
+
+
+@dataclass
 class RecordingSettings:
     """Screen recording settings."""
 
@@ -58,8 +68,10 @@ class RecordingSettings:
     resolution: tuple[int, int] | None = None  # None = auto-detect
     device_scale_factor: float | None = None
     highlight_clicks: bool = True
-    mouse_spotlight: bool = True
+    mouse_spotlight: bool = False
     capture_audio: bool = False
+    narration_timing: str = "during"  # "during" = audio with action, "anticipatory" = audio before action
+    show_cursor: bool = False  # Inject visible cursor element in recordings
 
 
 @dataclass
@@ -93,6 +105,7 @@ class ProjectConfig:
     tts: TTSConfig = field(default_factory=TTSConfig)
     recording: RecordingSettings = field(default_factory=RecordingSettings)
     video: VideoSettings = field(default_factory=VideoSettings)
+    block_pauses: BlockPauseConfig = field(default_factory=BlockPauseConfig)
 
     def ensure_output_dir(self) -> None:
         """Create output directory if it doesn't exist."""

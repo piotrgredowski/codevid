@@ -233,6 +233,9 @@ class VideoComposer:
             # Fallback: just use the original video
             final_video = video
 
+        # 5. Add overlays (cursor spotlights, click highlights)
+        final_video = self._add_overlays(final_video, markers)
+
         # Generate captions (using the actual audio durations)
         captions_path = None
         if self.config.include_captions and script:
@@ -523,8 +526,11 @@ class VideoComposer:
         return video
 
     def _add_overlays(self, video: Any, markers: list[EventMarker]) -> Any:
-        """Add click highlights and step indicators."""
+        """Add cursor spotlights, click highlights, and step indicators."""
         # Generate overlay specifications
+        cursor_spotlights = self.overlay_generator.create_cursor_spotlights(
+            markers, (video.w, video.h)
+        )
         click_highlights = self.overlay_generator.create_click_highlights(
             markers, (video.w, video.h)
         )
@@ -532,7 +538,7 @@ class VideoComposer:
             markers, (video.w, video.h)
         )
 
-        all_overlays = click_highlights + step_indicators
+        all_overlays = cursor_spotlights + click_highlights + step_indicators
 
         if all_overlays:
             return self.overlay_generator.apply_overlays_moviepy(video, all_overlays)

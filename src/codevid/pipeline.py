@@ -9,7 +9,7 @@ from typing import Callable
 from codevid.audio.tts import AudioSegment, TTSProvider
 from codevid.composer.editor import CompositionConfig, CompositionResult, VideoComposer
 from codevid.llm.base import LLMProvider
-from codevid.models import ParsedTest, VideoScript
+from codevid.models import ActionType, ParsedTest, TestStep, VideoScript
 from codevid.models.project import ProjectConfig
 from codevid.parsers.base import TestParser
 from codevid.recorder.screen import EventMarker
@@ -206,6 +206,7 @@ class Pipeline:
 
         Maps narration audio durations to test steps so each step waits
         for its narration to complete. Skipped steps get minimal delay.
+        Block pauses are added after logical blocks (navigation, form submit, assertions).
 
         Args:
             script: The video script with segment-to-step mapping.
@@ -238,9 +239,71 @@ class Pipeline:
             else:
                 audio_duration = step_durations.get(step_idx, 0.0)
                 # Step delay should be at least audio duration, but not less than min_delay
-                delays.append(max(audio_duration, min_delay))
+                delay = max(audio_duration, min_delay)
+
+                # Add block pause if enabled
+                if test and step_idx < len(test.steps):
+                    step = test.steps[step_idx]
+                    delay += self._get_block_pause(step)
+
+                delays.append(delay)
 
         return delays
+
+    def _get_block_pause(self, step: TestStep) -> float:
+        """Detect logical block end and return extra pause.
+
+        Adds breathing room after major transitions:
+        - Navigation: page loads need time to settle visually
+        - Form submit: results need time to appear
+        - Assertions: viewers need time to see validation
+
+        Args:
+            step: The current step.
+
+        Returns:
+            Extra pause in seconds (0.0 if no block pause needed).
+        """
+        block_config = self.config.project_config.block_pauses
+        if not block_config.enabled:
+            return 0.0
+
+        if step.action == ActionType.NAVIGATE:
+            return block_config.navigation
+        if step.action == ActionType.ASSERT:
+            return block_config.assertion
+        if step.action == ActionType.CLICK and self._is_submit_button(step):
+            return block_config.form_submit
+
+        return 0.0
+
+    def _is_submit_button(self, step: TestStep) -> bool:
+        """Check if click target looks like a submit button.
+
+        Detects common form submission patterns in selectors.
+
+        Args:
+            step: The click step to check.
+
+        Returns:
+            True if the target appears to be a submit button.
+        """
+        submit_indicators = [
+            "submit",
+            "save",
+            "create",
+            "send",
+            "login",
+            "sign",
+            "confirm",
+            "checkout",
+            "complete",
+            "finish",
+            "register",
+            "subscribe",
+        ]
+        target_lower = step.target.lower()
+        return any(indicator in target_lower for indicator in submit_indicators)
 
     async def _record_test(
         self,
@@ -271,6 +334,9 @@ class Pipeline:
             if w <= 0 or h <= 0:
                 raise PipelineError(f"Invalid recording resolution: {configured_resolution}")
 
+        # Check if anticipatory narration mode is enabled
+        anticipatory = self.config.project_config.recording.narration_timing == "anticipatory"
+
         executor_config = ExecutorConfig(
             headless=True,
             slow_mo=100,
@@ -281,6 +347,8 @@ class Pipeline:
             step_delays=step_delays,  # Per-step delays from audio durations
             record_video_dir=video_dir,
             record_video_size=configured_resolution,
+            anticipatory_mode=anticipatory,
+            show_cursor=self.config.project_config.recording.show_cursor,
         )
         executor = PlaywrightExecutor(executor_config)
 

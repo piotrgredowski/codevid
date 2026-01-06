@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Callable
 from playwright.async_api import Browser, Page, async_playwright
 from playwright.async_api import expect as async_expect
 
+from codevid.executor.mouse_helper import MOUSE_HELPER_JS
 from codevid.models import ActionType, ParsedTest, TestStep
 from codevid.recorder.screen import EventMarker
 
@@ -31,6 +32,8 @@ class ExecutorConfig:
     step_delays: list[float] | None = None  # Per-step delays (overrides step_delay)
     record_video_dir: Path | None = None
     record_video_size: tuple[int, int] | None = None  # Defaults to viewport size
+    anticipatory_mode: bool = False  # If True, wait before action (audio plays first)
+    show_cursor: bool = False  # Inject visible cursor element in recordings
 
 
 @dataclass
@@ -103,6 +106,10 @@ class PlaywrightExecutor:
                     context_kwargs["record_video_size"] = {"width": w, "height": h}
 
             context = await self._browser.new_context(**context_kwargs)
+
+            # Inject mouse helper script for visible cursor in recordings
+
+
             self._page = await context.new_page()
 
             # Reset timer to align with the start of video recording (which begins at page creation)
@@ -139,17 +146,32 @@ class PlaywrightExecutor:
                         )
                     markers.append(marker)
 
-                    # Execute the step
-                    await self._execute_step(step)
-
-                    # Add delay for visual clarity (uses per-step delay if available)
+                    # Get step delay
                     delay = self._get_step_delay(i)
-                    if delay > 0:
-                        await asyncio.sleep(delay)
 
-                    # Safety Buffer: Add a gap between steps for visual stabilization
-                    # This is included in the step duration for accurate audio-video sync
-                    await asyncio.sleep(0.5)
+                    # Anticipatory mode: wait for narration BEFORE action
+                    # (viewer hears what will happen, then sees it)
+                    if self.config.anticipatory_mode:
+                        if delay > 0:
+                            await asyncio.sleep(delay)
+                        click_coords = await self._execute_step(step)
+                        # Brief hold after action so viewer can see result
+                        await asyncio.sleep(0.5)
+                    else:
+                        # Standard mode: execute action, then wait
+                        click_coords = await self._execute_step(step)
+                        if delay > 0:
+                            await asyncio.sleep(delay)
+                        # Safety Buffer: Add a gap between steps for visual stabilization
+                        await asyncio.sleep(0.5)
+
+                    # Update the last step_start marker with click coordinates
+                    if click_coords and markers:
+                        for m in reversed(markers):
+                            if m.event_type == "step_start" and m.metadata.get("index") == i:
+                                m.metadata["x"] = click_coords[0]
+                                m.metadata["y"] = click_coords[1]
+                                break
 
                     # Mark step end AFTER the safety buffer (for accurate composition timing)
                     step_end_time = time.time() - start_time
@@ -249,6 +271,11 @@ class PlaywrightExecutor:
 
                 # Create new context with video recording
                 context = await browser.new_context(**context_kwargs)
+
+                # Inject mouse helper script for visible cursor in recordings
+                if self.config.show_cursor:
+                    await context.add_init_script(MOUSE_HELPER_JS)
+
                 page = await context.new_page()
                 self._page = page
 
@@ -466,6 +493,11 @@ class PlaywrightExecutor:
             context_kwargs["storage_state"] = str(state_file)
 
         context = await browser.new_context(**context_kwargs)
+
+        # Inject mouse helper script for visible cursor in recordings
+        if self.config.show_cursor:
+            await context.add_init_script(MOUSE_HELPER_JS)
+
         page = await context.new_page()
         self._page = page
 
@@ -508,13 +540,29 @@ class PlaywrightExecutor:
                     },
                 ))
 
-                await self._execute_step(step)
-
-                # Get step delay (use position within recorded steps, not original index)
+                # Get step delay
                 delay = self._get_step_delay(original_index)
-                if delay > 0:
-                    await asyncio.sleep(delay)
-                await asyncio.sleep(0.5)  # Safety buffer
+
+                # Anticipatory mode: wait for narration BEFORE action
+                if self.config.anticipatory_mode:
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    click_coords = await self._execute_step(step)
+                    await asyncio.sleep(0.5)  # Brief hold after action
+                else:
+                    # Standard mode: execute action, then wait
+                    click_coords = await self._execute_step(step)
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    await asyncio.sleep(0.5)  # Safety buffer
+
+                # Update the last step_start marker with click coordinates
+                if click_coords and markers:
+                    for m in reversed(markers):
+                        if m.event_type == "step_start" and m.metadata.get("index") == original_index:
+                            m.metadata["x"] = click_coords[0]
+                            m.metadata["y"] = click_coords[1]
+                            break
 
                 # Mark step end
                 step_end_time = time.time() - start_time
@@ -579,12 +627,18 @@ class PlaywrightExecutor:
             await page.close()
             await context.close()
 
-    async def _execute_step(self, step: TestStep) -> None:
-        """Execute a single test step."""
+    async def _execute_step(self, step: TestStep) -> tuple[int, int] | None:
+        """Execute a single test step.
+
+        Returns:
+            For click/hover actions, returns (x, y) center coordinates of the clicked element.
+            For other actions, returns None.
+        """
         if self._page is None:
             raise ExecutorError("No page available")
 
         page = self._page
+        click_coords: tuple[int, int] | None = None
 
         match step.action:
             case ActionType.NAVIGATE:
@@ -592,6 +646,15 @@ class PlaywrightExecutor:
 
             case ActionType.CLICK:
                 locator = self._get_locator(page, step.target)
+                # Capture element center coordinates before clicking
+                try:
+                    box = await locator.bounding_box()
+                    if box:
+                        x = int(box["x"] + box["width"] / 2)
+                        y = int(box["y"] + box["height"] / 2)
+                        click_coords = (x, y)
+                except Exception:
+                    pass  # Continue without coordinates if bounding box fails
                 await locator.click()
 
             case ActionType.TYPE:
@@ -608,6 +671,15 @@ class PlaywrightExecutor:
 
             case ActionType.HOVER:
                 locator = self._get_locator(page, step.target)
+                # Capture element center coordinates before hovering
+                try:
+                    box = await locator.bounding_box()
+                    if box:
+                        x = int(box["x"] + box["width"] / 2)
+                        y = int(box["y"] + box["height"] / 2)
+                        click_coords = (x, y)
+                except Exception:
+                    pass
                 await locator.hover()
 
             case ActionType.SELECT:
@@ -632,6 +704,8 @@ class PlaywrightExecutor:
             case _:
                 # Unknown action - skip
                 pass
+
+        return click_coords
 
     def _get_locator(self, page: Page, target: str):
         """Get a Playwright locator from a target string."""

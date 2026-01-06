@@ -110,8 +110,10 @@ def parse_recording_settings(data: dict[str, Any]) -> RecordingSettings:
         resolution=resolution,
         device_scale_factor=data.get("device_scale_factor"),
         highlight_clicks=data.get("highlight_clicks", True),
-        mouse_spotlight=data.get("mouse_spotlight", True),
+        mouse_spotlight=data.get("mouse_spotlight", False),
         capture_audio=data.get("capture_audio", False),
+        narration_timing=data.get("narration_timing", "during"),
+        show_cursor=data.get("show_cursor", False),
     )
 
 
