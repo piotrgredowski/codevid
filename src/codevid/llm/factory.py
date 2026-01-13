@@ -17,7 +17,7 @@ def create_llm_provider(config: LLMConfig) -> LLMProvider:
         LLMError: If the provider cannot be created.
     """
     if config.provider == LLMProviderType.ANTHROPIC:
-        from codevid.llm.anthropic_provider import AnthropicProvider
+        from codevid.llm.provider_anthropic import AnthropicProvider
 
         return AnthropicProvider(
             api_key=config.api_key,
@@ -25,7 +25,7 @@ def create_llm_provider(config: LLMConfig) -> LLMProvider:
         )
 
     elif config.provider == LLMProviderType.OPENAI:
-        from codevid.llm.openai_provider import OpenAIProvider
+        from codevid.llm.provider_openai import OpenAIProvider
 
         return OpenAIProvider(
             api_key=config.api_key,
@@ -34,7 +34,7 @@ def create_llm_provider(config: LLMConfig) -> LLMProvider:
         )
 
     elif config.provider == LLMProviderType.OLLAMA:
-        from codevid.llm.ollama import OllamaProvider
+        from codevid.llm.provider_ollama import OllamaProvider
 
         return OllamaProvider(
             model=config.model,
