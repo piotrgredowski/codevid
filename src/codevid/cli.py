@@ -2,20 +2,21 @@
 
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 
 from codevid import __version__
+from codevid.audio.factory import create_tts_provider
+from codevid.audio.tts import TTSProvider
 from codevid.config import load_config
-from codevid.models.project import LLMProviderType, TTSProviderType
-from codevid.llm.factory import LLMError, create_llm_provider
+from codevid.llm.base import LLMError, LLMProvider
+from codevid.llm.factory import create_llm_provider
 from codevid.llm.provider_simple import SimpleLLM
+from codevid.models.project import LLMProviderType, ProjectConfig, TTSProviderType
 from codevid.parsers.playwright import PlaywrightParser
 from codevid.pipeline import Pipeline, PipelineConfig
-from codevid.audio.factory import TTSError, create_tts_provider
 
 app = typer.Typer(
     name="codevid",
@@ -48,7 +49,7 @@ def version_callback(value: bool) -> None:
 
 @app.callback()
 def main(
-    version: Optional[bool] = typer.Option(
+    version: bool | None = typer.Option(
         None,
         "--version",
         "-V",
@@ -75,37 +76,37 @@ def generate(
         "--output",
         help="Output video path.",
     ),
-    llm: Optional[LLMChoice] = typer.Option(
+    llm: LLMChoice | None = typer.Option(
         None,
         "--llm",
         help="LLM provider for script generation (overrides config file).",
     ),
-    llm_model: Optional[str] = typer.Option(
+    llm_model: str | None = typer.Option(
         None,
         "--llm-model",
         help="Specific LLM model to use.",
     ),
-    tts: Optional[TTSChoice] = typer.Option(
+    tts: TTSChoice | None = typer.Option(
         None,
         "--tts",
         help="Text-to-speech provider (overrides config file).",
     ),
-    voice: Optional[str] = typer.Option(
+    voice: str | None = typer.Option(
         None,
         "--voice",
         help="TTS voice name.",
     ),
-    theme: Optional[str] = typer.Option(
+    theme: str | None = typer.Option(
         None,
         "--theme",
         help="Video theme/style.",
     ),
-    app_name: Optional[str] = typer.Option(
+    app_name: str | None = typer.Option(
         None,
         "--app-name",
         help="Application name for narration context.",
     ),
-    captions: Optional[bool] = typer.Option(
+    captions: bool | None = typer.Option(
         None,
         "--captions/--no-captions",
         help="Include captions in video.",
@@ -115,13 +116,21 @@ def generate(
         "--preview",
         help="Preview script without recording.",
     ),
-    config_file: Optional[Path] = typer.Option(
+    use_cached_narration_script: bool = typer.Option(
+        False,
+        "--use-cached-narration-script",
+        help=(
+            "Reuse a cached narration script when the test file and narration context are "
+            "unchanged."
+        ),
+    ),
+    config_file: Path | None = typer.Option(
         None,
         "--config",
         "-c",
         help="Path to configuration file.",
     ),
-    storage_state: Optional[Path] = typer.Option(
+    storage_state: Path | None = typer.Option(
         None,
         "--storage-state",
         help="Path to Playwright storage state file (auth.json).",
@@ -165,16 +174,17 @@ def generate(
     )
 
     if preview:
-        _run_preview(test_file, config, app_name, verbose)
+        _run_preview(test_file, config, app_name, verbose, use_cached_narration_script)
     else:
-        _run_generate(test_file, output, config, app_name, verbose)
+        _run_generate(test_file, output, config, app_name, verbose, use_cached_narration_script)
 
 
 def _run_preview(
     test_file: Path,
-    project_config,
-    app_name: Optional[str],
+    project_config: ProjectConfig,
+    app_name: str | None,
     verbose: bool,
+    use_cached_narration_script: bool,
 ) -> None:
     """Preview the generated script without recording."""
     console.print("\n[yellow]Preview mode - generating script only...[/yellow]\n")
@@ -190,6 +200,7 @@ def _run_preview(
             project_config=project_config,
             app_name=app_name,
             preview_mode=True,
+            use_cached_narration_script=use_cached_narration_script,
         ),
         parser=parser,
         llm=llm_provider,
@@ -216,9 +227,10 @@ def _run_preview(
 def _run_generate(
     test_file: Path,
     output: Path,
-    project_config,
-    app_name: Optional[str],
+    project_config: ProjectConfig,
+    app_name: str | None,
     verbose: bool,
+    use_cached_narration_script: bool,
 ) -> None:
     """Run the full generation pipeline."""
     project_config.ensure_output_dir()
@@ -235,6 +247,7 @@ def _run_generate(
             project_config=project_config,
             app_name=app_name,
             preview_mode=False,
+            use_cached_narration_script=use_cached_narration_script,
         ),
         parser=parser,
         llm=llm_provider,
@@ -261,22 +274,22 @@ def preview(
         exists=True,
         readable=True,
     ),
-    llm: Optional[LLMChoice] = typer.Option(
+    llm: LLMChoice | None = typer.Option(
         None,
         "--llm",
         help="LLM provider (overrides config file).",
     ),
-    llm_model: Optional[str] = typer.Option(
+    llm_model: str | None = typer.Option(
         None,
         "--llm-model",
         help="Specific LLM model.",
     ),
-    app_name: Optional[str] = typer.Option(
+    app_name: str | None = typer.Option(
         None,
         "--app-name",
         help="Application name for context.",
     ),
-    config_file: Optional[Path] = typer.Option(
+    config_file: Path | None = typer.Option(
         None,
         "--config",
         "-c",
@@ -287,6 +300,14 @@ def preview(
         "-v",
         "--verbose",
         help="Verbose output.",
+    ),
+    use_cached_narration_script: bool = typer.Option(
+        False,
+        "--use-cached-narration-script",
+        help=(
+            "Reuse a cached narration script when the test file and narration context are "
+            "unchanged."
+        ),
     ),
 ) -> None:
     """Preview the generated script without recording.
@@ -299,7 +320,7 @@ def preview(
     if llm_model is not None:
         config.llm.model = llm_model
 
-    _run_preview(test_file, config, app_name, verbose)
+    _run_preview(test_file, config, app_name, verbose, use_cached_narration_script)
 
 
 @app.command("list-voices")
@@ -435,18 +456,19 @@ tests:
     console.print(f"[green]Created configuration file:[/green] {config_path}")
 
 
-def _build_llm_provider(config) -> object:
+def _build_llm_provider(config: ProjectConfig) -> LLMProvider:
     """Create an LLM provider, falling back to a local rule-based generator."""
     try:
         return create_llm_provider(config.llm)
     except LLMError as e:
         console.print(
-            f"[yellow]LLM provider unavailable ({e}). Falling back to local script generation.[/yellow]"
+            f"[yellow]LLM provider unavailable ({e}). "
+            "Falling back to local script generation.[/yellow]"
         )
         return SimpleLLM()
 
 
-def _build_tts_provider(config):
+def _build_tts_provider(config: ProjectConfig) -> TTSProvider:
     """Create a TTS provider; fail loudly if unavailable to avoid silent videos."""
     return create_tts_provider(config.tts)
 

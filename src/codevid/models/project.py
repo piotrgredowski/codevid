@@ -98,6 +98,7 @@ class VideoSettings:
 class ProjectConfig:
     """Complete project configuration."""
 
+    app_name: str | None = None
     name: str = "Codevid Project"
     output_dir: Path = field(default_factory=lambda: Path("./output"))
     test_framework: TestFramework = TestFramework.PLAYWRIGHT

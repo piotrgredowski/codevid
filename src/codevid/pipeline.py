@@ -1,15 +1,20 @@
 """Main pipeline orchestration for Codevid."""
 
 import asyncio
+import hashlib
+import json
 import shutil
+import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any
 
+from codevid import __version__
 from codevid.audio.tts import AudioSegment, TTSProvider
 from codevid.composer.editor import CompositionConfig, CompositionResult, VideoComposer
 from codevid.llm.base import LLMProvider
-from codevid.models import ActionType, ParsedTest, TestStep, VideoScript
+from codevid.models import ActionType, NarrationSegment, ParsedTest, TestStep, VideoScript
 from codevid.models.project import ProjectConfig
 from codevid.parsers.base import TestParser
 from codevid.recorder.screen import EventMarker
@@ -24,6 +29,7 @@ class PipelineConfig:
     project_config: ProjectConfig
     app_name: str | None = None
     preview_mode: bool = False
+    use_cached_narration_script: bool = False
 
 
 @dataclass
@@ -65,6 +71,143 @@ class Pipeline:
         """Get the temporary directory path."""
         return self.config.output.parent / ".codevid_temp"
 
+    def _get_script_cache_dir(self) -> Path:
+        return self.config.project_config.output_dir / ".codevid_cache"
+
+    def _get_script_cache_path(self) -> Path:
+        resolved = str(self.config.test_file.resolve())
+        path_hash = hashlib.sha256(resolved.encode("utf-8")).hexdigest()
+        return self._get_script_cache_dir() / f"{path_hash}.json"
+
+    def _compute_file_sha256(self, path: Path) -> str:
+        hasher = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+
+    def _script_fingerprint(self) -> dict[str, Any]:
+        if self._llm is None:
+            raise PipelineError("No LLM provider configured")
+
+        return {
+            "test_file_sha256": self._compute_file_sha256(self.config.test_file),
+            "app_name": self.config.app_name or "the application",
+            "llm_provider": self._llm.provider_name,
+            "llm_model": self._llm.model_name,
+            "codevid_version": __version__,
+        }
+
+    def _serialize_script(self, script: VideoScript) -> dict[str, Any]:
+        return {
+            "title": script.title,
+            "introduction": script.introduction,
+            "conclusion": script.conclusion,
+            "total_estimated_duration": script.total_estimated_duration,
+            "segments": [
+                {
+                    "text": seg.text,
+                    "step_index": seg.step_index,
+                    "timing_hint": seg.timing_hint,
+                    "emphasis_words": list(seg.emphasis_words),
+                }
+                for seg in script.segments
+            ],
+        }
+
+    def _deserialize_script(self, data: dict[str, Any]) -> VideoScript:
+        segments_data = data.get("segments", [])
+        segments: list[NarrationSegment] = []
+        if isinstance(segments_data, list):
+            for seg in segments_data:
+                if not isinstance(seg, dict):
+                    continue
+
+                timing_hint = seg.get("timing_hint")
+                segments.append(
+                    NarrationSegment(
+                        text=str(seg.get("text", "")),
+                        step_index=int(seg.get("step_index", 0)),
+                        timing_hint=float(timing_hint or 0.0),
+                        emphasis_words=list(seg.get("emphasis_words") or []),
+                    )
+                )
+
+        return VideoScript(
+            title=str(data.get("title", "")),
+            introduction=str(data.get("introduction", "")),
+            segments=segments,
+            conclusion=str(data.get("conclusion", "")),
+            total_estimated_duration=float(data.get("total_estimated_duration", 0.0) or 0.0),
+        )
+
+    def _load_cached_script(self, parsed_test: ParsedTest) -> VideoScript | None:
+        cache_path = self._get_script_cache_path()
+        if not cache_path.exists():
+            return None
+
+        try:
+            with cache_path.open("r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception:
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+
+        if payload.get("schema_version") != 1:
+            return None
+
+        expected = self._script_fingerprint()
+        if payload.get("fingerprint") != expected:
+            return None
+
+        script_data = payload.get("script")
+        if not isinstance(script_data, dict):
+            return None
+
+        script = self._deserialize_script(script_data)
+        if any(
+            seg.step_index < 0 or seg.step_index >= len(parsed_test.steps)
+            for seg in script.segments
+        ):
+            return None
+
+        return script
+
+    def _save_cached_script(self, script: VideoScript) -> None:
+        cache_dir = self._get_script_cache_dir()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = self._get_script_cache_path()
+
+        payload: dict[str, Any] = {
+            "schema_version": 1,
+            "fingerprint": self._script_fingerprint(),
+            "script": self._serialize_script(script),
+        }
+
+        tmp_file = None
+        try:
+            tmp_file = tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=str(cache_dir),
+                delete=False,
+                prefix=cache_path.stem + ".",
+                suffix=".tmp",
+            )
+            json.dump(payload, tmp_file, indent=2, sort_keys=True)
+            tmp_file.flush()
+            tmp_name = tmp_file.name
+            tmp_file.close()
+            Path(tmp_name).replace(cache_path)
+        finally:
+            if tmp_file is not None:
+                try:
+                    tmp_file.close()
+                except Exception:
+                    pass
+
     def _cleanup_temp(self) -> None:
         """Remove the temporary directory and all its contents."""
         temp_dir = self._get_temp_dir()
@@ -83,16 +226,28 @@ class Pipeline:
             parsed_test = self._parse_test()
             self._report_progress(10, f"Found {len(parsed_test.steps)} test steps")
 
-            # Step 2: Generate script with LLM
-            self._report_progress(15, "Generating narration script...")
-            script = await self._generate_script(parsed_test)
-            with open(self.config.output.parent / "generated_script.txt", "w") as f:
+            # Step 2: Generate script with LLM (or load from cache)
+            script: VideoScript | None = None
+            if self.config.use_cached_narration_script:
+                self._report_progress(15, "Checking for cached narration script...")
+                script = self._load_cached_script(parsed_test)
+                if script is not None:
+                    self._report_progress(20, "Using cached narration script")
+
+            if script is None:
+                self._report_progress(15, "Generating narration script...")
+                script = await self._generate_script(parsed_test)
+                if self.config.use_cached_narration_script:
+                    self._save_cached_script(script)
+
+            generated_script_path = self.config.output.parent / "generated_script.txt"
+            with open(generated_script_path, "w") as f:
                 f.write(f"Title: {script.title}\n\n")
                 f.write(f"Introduction:\n{script.introduction}\n\n")
                 for i, segment in enumerate(script.segments):
                     f.write(f"Segment {i} (Step {segment.step_index}):\n{segment.text}\n\n")
                 f.write(f"Conclusion:\n{script.conclusion}\n")
-            self._report_progress(25, "Script generated")
+            self._report_progress(25, f"Script generated and saved to: {generated_script_path}")
 
             # Preview mode stops here
             if self.config.preview_mode:
