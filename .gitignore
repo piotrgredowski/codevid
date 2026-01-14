@@ -1,5 +1,6 @@
 # Byte-compiled / optimized / DLL files
 .codevid_temp/
+.codevid_cache/
 __pycache__/
 *.mp4
 *.mp3
@@ -228,3 +229,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Directory for storing temporary files
+.scratchpad/
