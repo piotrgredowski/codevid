@@ -30,6 +30,7 @@ REQUIRED STYLE:
 - Be action-specific: use exact values from steps (e.g., "Enter admin@acme.com" not "Enter your email")
 - One sentence per step unless combining related actions
 - Address viewer as "you" only when necessary
+- Don't say "https://example.com" - just say "example.com", omit not spoken parts of URLs
 
 PATTERNS TO AVOID (never use these):
 - Weak openings: "So," "Now," "Okay," "Alright," "Next," "First,"

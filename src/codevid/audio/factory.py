@@ -77,6 +77,14 @@ def create_tts_provider(config: TTSConfig) -> TTSProvider:
             speed=config.speed,
         )
 
+    elif config.provider == TTSProviderType.KOKORO:
+        from codevid.audio.kokoro_provider import KokoroTTSProvider
+
+        return KokoroTTSProvider(
+            voice=config.voice,
+            speed=config.speed,
+        )
+
     elif config.provider == TTSProviderType.ELEVENLABS:
         raise TTSError(
             "ElevenLabs TTS is not yet implemented",
