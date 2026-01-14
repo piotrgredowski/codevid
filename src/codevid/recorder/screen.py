@@ -1,10 +1,10 @@
 """Screen recording functionality."""
 
-from dataclasses import dataclass, field
-from pathlib import Path
 import platform
 import subprocess
 import time
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -33,7 +33,7 @@ class ScreenRecorder:
 
     def __init__(self, config: RecordingConfig):
         self.config = config
-        self._process: subprocess.Popen | None = None
+        self._process: subprocess.Popen[bytes] | None = None
         self._markers: list[EventMarker] = []
         self._start_time: float | None = None
         self._is_recording = False
@@ -100,6 +100,7 @@ class ScreenRecorder:
 
         # Send 'q' to gracefully stop FFmpeg
         try:
+            assert self._process.stdin is not None
             self._process.stdin.write(b"q")
             self._process.stdin.flush()
             self._process.wait(timeout=10)
@@ -139,7 +140,7 @@ class ScreenRecorder:
             mouse_args = ["-capture_cursor", "1"]
 
         return [
-            "Ye",
+            "ffmpeg",
             "-y",  # Overwrite output
             *resolution_args,
             "-framerate",
