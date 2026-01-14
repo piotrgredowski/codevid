@@ -34,6 +34,7 @@ class ExecutorConfig:
     record_video_size: tuple[int, int] | None = None  # Defaults to viewport size
     anticipatory_mode: bool = False  # If True, wait before action (audio plays first)
     show_cursor: bool = False  # Inject visible cursor element in recordings
+    storage_state: Path | None = None  # Path to Playwright storage state (auth.json)
 
 
 @dataclass
@@ -104,6 +105,9 @@ class PlaywrightExecutor:
                 if self.config.record_video_size:
                     w, h = self.config.record_video_size
                     context_kwargs["record_video_size"] = {"width": w, "height": h}
+
+            if self.config.storage_state:
+                context_kwargs["storage_state"] = str(self.config.storage_state)
 
             context = await self._browser.new_context(**context_kwargs)
 
@@ -265,9 +269,11 @@ class PlaywrightExecutor:
                     w, h = self.config.record_video_size
                     context_kwargs["record_video_size"] = {"width": w, "height": h}
 
-                # Restore state from previous step if available
+                # Restore state from previous step if available, otherwise use initial storage state
                 if state_file.exists():
                     context_kwargs["storage_state"] = str(state_file)
+                elif self.config.storage_state:
+                    context_kwargs["storage_state"] = str(self.config.storage_state)
 
                 # Create new context with video recording
                 context = await browser.new_context(**context_kwargs)
@@ -441,6 +447,10 @@ class PlaywrightExecutor:
         if self.config.device_scale_factor is not None:
             context_kwargs["device_scale_factor"] = self.config.device_scale_factor
 
+        # Use initial storage state if provided
+        if self.config.storage_state:
+            context_kwargs["storage_state"] = str(self.config.storage_state)
+
         # NO record_video_dir for setup phase
         context = await browser.new_context(**context_kwargs)
         page = await context.new_page()
@@ -488,9 +498,11 @@ class PlaywrightExecutor:
             w, h = self.config.record_video_size
             context_kwargs["record_video_size"] = {"width": w, "height": h}
 
-        # Restore state from setup phase
+        # Restore state from setup phase, or use initial storage state
         if state_file and state_file.exists():
             context_kwargs["storage_state"] = str(state_file)
+        elif self.config.storage_state:
+            context_kwargs["storage_state"] = str(self.config.storage_state)
 
         context = await browser.new_context(**context_kwargs)
 
@@ -606,6 +618,8 @@ class PlaywrightExecutor:
         # Restore state from recording phase
         if state_file.exists():
             context_kwargs["storage_state"] = str(state_file)
+        elif self.config.storage_state:
+            context_kwargs["storage_state"] = str(self.config.storage_state)
 
         context = await browser.new_context(**context_kwargs)
         page = await context.new_page()

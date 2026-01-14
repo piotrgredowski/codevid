@@ -72,6 +72,7 @@ class RecordingSettings:
     capture_audio: bool = False
     narration_timing: str = "during"  # "during" = audio with action, "anticipatory" = audio before action
     show_cursor: bool = False  # Inject visible cursor element in recordings
+    storage_state: Path | None = None  # Path to Playwright storage state (auth.json)
 
 
 @dataclass
