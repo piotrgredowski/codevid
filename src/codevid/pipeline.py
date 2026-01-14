@@ -349,6 +349,7 @@ class Pipeline:
             record_video_size=configured_resolution,
             anticipatory_mode=anticipatory,
             show_cursor=self.config.project_config.recording.show_cursor,
+            storage_state=self.config.project_config.recording.storage_state,
         )
         executor = PlaywrightExecutor(executor_config)
 

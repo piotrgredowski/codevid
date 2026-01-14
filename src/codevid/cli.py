@@ -119,6 +119,11 @@ def generate(
         "-c",
         help="Path to configuration file.",
     ),
+    storage_state: Optional[Path] = typer.Option(
+        None,
+        "--storage-state",
+        help="Path to Playwright storage state file (auth.json).",
+    ),
     verbose: bool = typer.Option(
         False,
         "-v",
@@ -143,6 +148,8 @@ def generate(
         config.video.theme = theme
     if captions is not None:
         config.video.include_captions = captions
+    if storage_state is not None:
+        config.recording.storage_state = storage_state
 
     console.print(
         Panel(

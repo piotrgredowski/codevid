@@ -105,6 +105,10 @@ def parse_recording_settings(data: dict[str, Any]) -> RecordingSettings:
     if resolution is not None:
         resolution = tuple(resolution)
 
+    storage_state = data.get("storage_state")
+    if storage_state:
+        storage_state = Path(storage_state)
+
     return RecordingSettings(
         fps=data.get("fps", 30),
         resolution=resolution,
@@ -114,6 +118,7 @@ def parse_recording_settings(data: dict[str, Any]) -> RecordingSettings:
         capture_audio=data.get("capture_audio", False),
         narration_timing=data.get("narration_timing", "during"),
         show_cursor=data.get("show_cursor", False),
+        storage_state=storage_state,
     )
 
 
