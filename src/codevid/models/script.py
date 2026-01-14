@@ -39,7 +39,9 @@ class VideoScript:
         """Calculate total estimated duration in seconds."""
         intro_words = len(self.introduction.split())
         conclusion_words = len(self.conclusion.split())
-        segment_duration = sum(seg.timing_hint for seg in self.segments)
+
+        # Handle case where timing_hint might be None
+        segment_duration = sum((seg.timing_hint or 0.0) for seg in self.segments)
 
         spoken_duration = ((intro_words + conclusion_words) / words_per_minute) * 60
         return spoken_duration + segment_duration
