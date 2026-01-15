@@ -169,7 +169,7 @@ class OverlayGenerator:
             VideoClip with overlays applied.
         """
         try:
-            from moviepy import CompositeVideoClip
+            from moviepy import CompositeVideoClip  # type: ignore[import-untyped]
         except ImportError:
             return video_clip
 
@@ -201,9 +201,8 @@ class OverlayGenerator:
     ) -> Any | None:
         """Create a click ripple effect clip."""
         try:
-            from moviepy import vfx
-            from moviepy import ColorClip
             import numpy as np
+            from moviepy import ColorClip, vfx  # type: ignore[import-untyped]
         except ImportError:
             return None
 
@@ -214,7 +213,7 @@ class OverlayGenerator:
         color = overlay["color"]
 
         # Create a simple colored circle that fades out
-        def make_frame(t):
+        def make_frame(t: float) -> Any:
             # Create transparent frame
             frame = np.zeros((video_size[1], video_size[0], 4), dtype=np.uint8)
 
@@ -250,11 +249,6 @@ class OverlayGenerator:
         video_clip: Any,
     ) -> Any | None:
         """Create a step indicator text clip."""
-        try:
-            from moviepy import TextClip
-        except ImportError:
-            return None
-
         step_num = overlay["step_number"]
         action = overlay["action"]
         timestamp = overlay["timestamp"]
@@ -301,8 +295,8 @@ class OverlayGenerator:
         shrinks to normal size, creating a visual "pulse" effect.
         """
         try:
-            from moviepy import VideoClip
             import numpy as np
+            from moviepy import VideoClip  # type: ignore[import-untyped]
         except ImportError:
             return None
 
@@ -377,9 +371,10 @@ class OverlayGenerator:
             return alpha_frame
 
         # Create RGB clip with alpha mask
-        from moviepy import VideoClip as VC
-        rgb_clip = VC(get_rgb(make_frame), duration=duration)
-        alpha_clip = VC(get_alpha(make_frame), duration=duration, is_mask=True)
+        from moviepy import VideoClip as VideoClipCls  # type: ignore[import-untyped]
+
+        rgb_clip = VideoClipCls(get_rgb(make_frame), duration=duration)
+        alpha_clip = VideoClipCls(get_alpha(make_frame), duration=duration, is_mask=True)
         rgb_clip = rgb_clip.with_mask(alpha_clip)
         rgb_clip = rgb_clip.with_start(timestamp)
 
@@ -388,14 +383,14 @@ class OverlayGenerator:
     def _safe_text_clip(self, text: str, **kwargs: Any) -> Any | None:
         """Build a TextClip but fall back to default font if the requested font is missing."""
         try:
-            from moviepy import TextClip
+            from moviepy import TextClip  # type: ignore[import-untyped]
         except ImportError:
             return None
 
         try:
             return TextClip(text=text, **kwargs)
         except Exception:
-            font = kwargs.pop("font", None)
+            kwargs.pop("font", None)
             try:
                 return TextClip(text=text, font=None, **kwargs)
             except Exception:
