@@ -13,54 +13,55 @@ class KokoroTTSProvider(TTSProvider):
 
     def __init__(self, voice: str | None = None, speed: float = 1.0) -> None:
         """Initialize Kokoro TTS provider.
-        
+
         Args:
             voice: Voice ID (default: 'af_bella').
             speed: Speed multiplier (default: 1.0).
         """
-        try:
-            import warnings
-            
-            # Suppress specific Kokoro/Torch warnings
-            warnings.filterwarnings("ignore", message=".*dropout option adds dropout after all but last recurrent layer.*")
-            warnings.filterwarnings("ignore", message=".*weight_norm.*is deprecated.*")
+        import warnings
 
-            # Monkey patch KPipeline if needed or ensure deps
-            from kokoro import KPipeline
-            
-            # Monkeypatch phonemizer to NOT use EspeakBackend by default if possible,
-            # or ensure we don't trigger pip/subprocess calls.
-            # However, looking at the code, it seems misaki or phonemizer might be trying to
-            # check version/library path which could trigger something.
-            # But "No module named pip" is VERY specific to `python -m pip` calls.
-            
-            # To fix this, we'll try to ensure we are using the internal espeakng-loader library path
-            # explicitly before KPipeline does anything.
-            import espeakng_loader
-            from phonemizer.backend.espeak.wrapper import EspeakWrapper
+        # Suppress specific Kokoro/Torch warnings
+        warnings.filterwarnings(
+            "ignore", message=".*dropout option adds dropout after all but last recurrent layer.*"
+        )
+        warnings.filterwarnings("ignore", message=".*weight_norm.*is deprecated.*")
+
+        try:
+            from kokoro import KPipeline  # type: ignore[import-not-found]
+        except ImportError as e:
+            raise TTSError(
+                "Kokoro dependencies not installed. Install with: uv sync --group local-kokoro",
+                provider="local_kokoro",
+            ) from e
+
+        # Optional hardening to avoid runtime downloads when optional deps are installed.
+        try:
+            import espeakng_loader  # type: ignore[import-not-found]
+            from phonemizer.backend.espeak.wrapper import (  # type: ignore[import-not-found]
+                EspeakWrapper,
+            )
+
             EspeakWrapper.set_library(espeakng_loader.get_library_path())
             EspeakWrapper.set_data_path(espeakng_loader.get_data_path())
+        except ImportError:
+            pass
 
-            # Check for spaCy model availability to avoid runtime download attempts via pip
-            import spacy.util
+        try:
+            import spacy.util  # type: ignore[import-not-found]
+
             if not spacy.util.is_package("en_core_web_sm"):
                 logger.warning(
                     "spaCy model 'en_core_web_sm' not found. "
-                    "Kokoro might attempt to download it via pip, which may fail in some environments. "
-                    "If it fails, run: uv run python -m spacy download en_core_web_sm"
+                    "If Kokoro attempts to download it via pip and fails, run: "
+                    "uv sync --group local-kokoro"
                 )
-
-        except ImportError as e:
-            raise TTSError(
-                "Kokoro dependencies not installed. "
-                "Install with: uv sync --group local-kokoro",
-                provider="local_kokoro",
-            ) from e
+        except ImportError:
+            pass
 
         # Set defaults
         self._voice = voice or "af_bella"  # Common default female voice
         self._speed = speed
-        
+
         # Initialize pipeline only once to save resources
         # 'a' = American English
         try:
@@ -83,51 +84,57 @@ class KokoroTTSProvider(TTSProvider):
 
     async def synthesize(self, text: str, output_path: Path) -> AudioSegment:
         """Synthesize speech from text using Kokoro."""
-        import soundfile as sf
-        
+        try:
+            import soundfile as sf  # type: ignore[import-not-found]
+        except ImportError as e:
+            raise TTSError(
+                "Kokoro dependencies not installed. Install with: uv sync --group local-kokoro",
+                provider="local_kokoro",
+            ) from e
+
         try:
             # Generate audio
             # Kokoro returns a generator of (graphemes, phonemes, audio)
             # We'll concatenate all audio segments
-            
+
             # Simple wrapper to just get audio for the full text
             # We treat the whole text as one block for simplicity in this integration
             # though Kokoro handles splitting internally.
-            
+
             generator = self._pipeline(
-                text, 
+                text,
                 voice=self._voice,
                 speed=self._speed,
-                split_pattern=r'\n+'
+                split_pattern=r"\n+",
             )
-            
+
             import numpy as np
             all_audio = []
-            
+
             for _, _, audio in generator:
                 if audio is not None:
                     all_audio.append(audio)
-            
+
             if not all_audio:
                 raise TTSError("No audio generated", provider="local_kokoro")
-                
+
             # Concatenate all numpy arrays
             final_audio = np.concatenate(all_audio)
-            
+
             # Save to file
             # Kokoro usually outputs at 24000Hz
             sample_rate = 24000
             sf.write(str(output_path), final_audio, sample_rate)
-            
+
             # Calculate duration
             duration = len(final_audio) / sample_rate
-            
+
             return AudioSegment(
                 path=output_path,
                 duration=duration,
                 text=text,
             )
-            
+
         except Exception as e:
             raise TTSError(
                 f"Kokoro synthesis failed: {e}",
