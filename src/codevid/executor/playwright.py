@@ -5,7 +5,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from playwright.async_api import Browser, Page, async_playwright
 from playwright.async_api import expect as async_expect
@@ -113,6 +113,8 @@ class PlaywrightExecutor:
 
             # Inject mouse helper script for visible cursor in recordings
 
+            if self.config.show_cursor:
+                await context.add_init_script(MOUSE_HELPER_JS)
 
             self._page = await context.new_page()
 
@@ -204,7 +206,7 @@ class PlaywrightExecutor:
                             path = await self._page.video.path()
                             recorded_video = Path(path)
                     except Exception:
-                        recorded_video = recorded_video
+                        pass
                 await context.close()
                 await self._browser.close()
 
@@ -699,7 +701,12 @@ class PlaywrightExecutor:
             case ActionType.SELECT:
                 locator = self._get_locator(page, step.target)
                 if step.value:
-                    await locator.select_option(step.value)
+                    if step.value.startswith("label="):
+                        await locator.select_option(label=step.value[len("label=") :])
+                    elif step.value.startswith("value="):
+                        await locator.select_option(value=step.value[len("value=") :])
+                    else:
+                        await locator.select_option(step.value)
 
             case ActionType.SCROLL:
                 locator = self._get_locator(page, step.target)
@@ -721,30 +728,23 @@ class PlaywrightExecutor:
 
         return click_coords
 
-    def _get_locator(self, page: Page, target: str):
+    def _get_locator(self, page: Page, target: str) -> Any:
         """Get a Playwright locator from a target string."""
-        # Handle chained locator expressions like:
-        # "get_by_text('X').locator('..')" or "locator('#a').get_by_role('button')"
-        if ").locator(" in target or ").get_by_" in target:
-            return self._eval_locator_chain(page, target)
+        chain_prefixes = (
+            "locator(",
+            "get_by_role(",
+            "get_by_text(",
+            "get_by_label(",
+            "get_by_placeholder(",
+            "get_by_test_id(",
+            "get_by_alt_text(",
+        )
 
-        # Handle simple get_by_* patterns from parsed code
-        if target.startswith("get_by_role"):
-            match = re.match(r"get_by_role\('([^']+)'", target)
-            if match:
-                return page.get_by_role(match.group(1))
-        elif target.startswith("get_by_label"):
-            match = re.match(r"get_by_label\('([^']+)'", target)
-            if match:
-                return page.get_by_label(match.group(1))
-        elif target.startswith("get_by_text"):
-            match = re.match(r"get_by_text\('([^']+)'", target)
-            if match:
-                return page.get_by_text(match.group(1))
-        elif target.startswith("get_by_placeholder"):
-            match = re.match(r"get_by_placeholder\('([^']+)'", target)
-            if match:
-                return page.get_by_placeholder(match.group(1))
+        # Check for chain patterns that include .first, .last, .nth(x) and locator/get_by_* calls.
+        if target.startswith(chain_prefixes) or any(
+            marker in target for marker in [").locator(", ").get_by_", ".first", ".last", ".nth("]
+        ):
+            return self._eval_locator_chain(page, target)
 
         # Handle explicit xpath selector
         if target.startswith("xpath="):
@@ -753,34 +753,120 @@ class PlaywrightExecutor:
         # Default: use as CSS selector
         return page.locator(target)
 
-    def _eval_locator_chain(self, page: Page, expr: str):
+    def _eval_locator_chain(self, page: Page, expr: str) -> Any:
         """Evaluate a chained locator expression.
 
         Handles chains like: "get_by_text('X').locator('..')"
+        And now supports: .first, .last, .nth(x), and multiple arguments
         """
-        result = page
+        result: Any = page
+        remainder = expr
 
-        # Parse method calls from the expression
-        # Match patterns like: method_name('argument')
-        calls = re.findall(r"(\w+)\('([^']+)'\)", expr)
+        while remainder:
+            if remainder.startswith(".first"):
+                result = result.first
+                remainder = remainder[len(".first") :]
+                continue
 
-        for method, arg in calls:
-            if method == "locator":
-                result = result.locator(arg)
-            elif method == "get_by_text":
-                result = result.get_by_text(arg)
-            elif method == "get_by_role":
-                result = result.get_by_role(arg)
-            elif method == "get_by_label":
-                result = result.get_by_label(arg)
-            elif method == "get_by_placeholder":
-                result = result.get_by_placeholder(arg)
-            elif method == "get_by_test_id":
-                result = result.get_by_test_id(arg)
-            elif method == "get_by_alt_text":
-                result = result.get_by_alt_text(arg)
+            if remainder.startswith(".last"):
+                result = result.last
+                remainder = remainder[len(".last") :]
+                continue
+
+            consumed = self._consume_call(remainder)
+            if consumed is None:
+                # Ignore stray dots, then stop.
+                if remainder.startswith("."):
+                    remainder = remainder[1:]
+                    continue
+                break
+
+            method, args_str, remainder = consumed
+
+            try:
+                args, kwargs = self._parse_args(args_str)
+                if method == "locator":
+                    result = result.locator(*args, **kwargs)
+                elif method == "get_by_role":
+                    result = result.get_by_role(*args, **kwargs)
+                elif method == "get_by_text":
+                    result = result.get_by_text(*args, **kwargs)
+                elif method == "get_by_label":
+                    result = result.get_by_label(*args, **kwargs)
+                elif method == "get_by_placeholder":
+                    result = result.get_by_placeholder(*args, **kwargs)
+                elif method == "get_by_test_id":
+                    result = result.get_by_test_id(*args, **kwargs)
+                elif method == "get_by_alt_text":
+                    result = result.get_by_alt_text(*args, **kwargs)
+                elif method == "nth":
+                    result = result.nth(*args, **kwargs)
+                else:
+                    # Unknown method in locator chain.
+                    break
+            except Exception:
+                break
 
         return result
+
+    def _consume_call(self, expr: str) -> tuple[str, str, str] | None:
+        s = expr
+        if s.startswith("."):
+            s = s[1:]
+
+        match = re.match(r"^(\w+)\(", s)
+        if match is None:
+            return None
+
+        method = match.group(1)
+        open_paren_at = len(method)
+        # s[open_paren_at] is '(' per regex.
+        i = open_paren_at + 1
+        depth = 1
+        quote: str | None = None
+        escape = False
+
+        while i < len(s):
+            ch = s[i]
+
+            if quote is not None:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == quote:
+                    quote = None
+                i += 1
+                continue
+
+            if ch in ("'", '"'):
+                quote = ch
+                i += 1
+                continue
+
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    args_str = s[open_paren_at + 1 : i]
+                    remainder = s[i + 1 :]
+                    return method, args_str, remainder
+
+            i += 1
+
+        return None
+
+    def _parse_args(self, args_str: str) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """Parse argument string into args and kwargs."""
+
+        def _capture(*args: Any, **kwargs: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
+            return args, kwargs
+
+        return eval(
+            f"_capture({args_str})",
+            {"_capture": _capture, "__builtins__": {}},
+        )
 
     async def _execute_wait(self, step: TestStep) -> None:
         """Execute a wait step."""
