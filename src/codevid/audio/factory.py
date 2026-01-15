@@ -60,7 +60,7 @@ def create_tts_provider(config: TTSConfig) -> TTSProvider:
         # Convert speed (1.0 = normal) to rate string ("+0%" = normal)
         rate = "+0%"
         if config.speed != 1.0:
-            rate_pct = int((config.speed - 1.0) * 100)
+            rate_pct = int(round((config.speed - 1.0) * 100))
             rate = f"{rate_pct:+d}%"
 
         return EdgeTTSProvider(
