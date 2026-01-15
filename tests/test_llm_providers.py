@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from codevid.llm import create_llm_provider, get_provider_for_name
-from codevid.llm.anthropic_provider import AnthropicProvider
+from codevid.llm.provider_anthropic import AnthropicProvider
 from codevid.llm.base import LLMError
-from codevid.llm.ollama import OllamaProvider
-from codevid.llm.openai_provider import OpenAIProvider
+from codevid.llm.provider_ollama import OllamaProvider
+from codevid.llm.provider_openai import OpenAIProvider
 from codevid.models import ActionType, ParsedTest, TestStep
 from codevid.models.project import LLMConfig, LLMProviderType
 
@@ -126,7 +126,7 @@ class TestOpenAIProvider:
     def test_init_creates_client(self, mock_openai_class):
         provider = OpenAIProvider(api_key="test-key")
         assert provider.provider_name == "openai"
-        assert provider.model_name == "gpt-4o"
+        assert provider.model_name == "gpt-5.1-2025-11-13"
         mock_openai_class.assert_called_once_with(api_key="test-key", base_url=None)
 
     @patch("openai.OpenAI")
