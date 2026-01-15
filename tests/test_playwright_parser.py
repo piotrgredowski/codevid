@@ -131,6 +131,40 @@ def test_role(page: Page):
         assert "get_by_role" in step.target
         assert "button" in step.target
 
+    def test_parse_get_by_role_with_first(self, parser: PlaywrightParser, tmp_path: Path):
+        test_file = tmp_path / "test_role_first.py"
+        test_file.write_text('''
+from playwright.sync_api import Page
+
+def test_role_first(page: Page):
+    page.get_by_role("link", name="Coin Flipper").first.click()
+''')
+        result = parser.parse(test_file)
+
+        assert len(result.steps) == 1
+        step = result.steps[0]
+        assert step.action == ActionType.CLICK
+        assert step.target.startswith("get_by_role(")
+        assert ".first" in step.target
+        assert "name=" in step.target
+
+    def test_parse_locator_chain_with_first(self, parser: PlaywrightParser, tmp_path: Path):
+        test_file = tmp_path / "test_chain_first.py"
+        test_file.write_text('''
+from playwright.sync_api import Page
+
+def test_chain_first(page: Page):
+    page.locator("#navigation").get_by_role("link", name="Coin Flipper").first.click()
+''')
+        result = parser.parse(test_file)
+
+        assert len(result.steps) == 1
+        step = result.steps[0]
+        assert step.action == ActionType.CLICK
+        assert step.target.startswith("locator(")
+        assert ".get_by_role" in step.target
+        assert ".first" in step.target
+
     def test_parse_expect_assertion(self, parser: PlaywrightParser, tmp_path: Path):
         test_file = tmp_path / "test_expect.py"
         test_file.write_text('''

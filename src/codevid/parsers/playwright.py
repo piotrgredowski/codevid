@@ -226,7 +226,7 @@ class PlaywrightParser(TestParser):
         steps = []
         # Track processed call node ids to avoid duplicates from await
         processed_calls: set[int] = set()
-        
+
         # Simple local variable context (name -> value)
         # We only track string constants assigned to variables
         context: dict[str, str] = {}
@@ -347,20 +347,57 @@ class PlaywrightParser(TestParser):
         if method_name == "select_option":
             # Same chain detection for select_option
             if self._is_chained_locator_call(node):
-                return self._get_string_arg(node, 0, context)
-            return self._get_string_arg(node, 1, context) or self._get_string_arg(node, 0, context)
+                return self._get_string_arg(node, 0, context) or self._get_select_option_kw(node, context)
+
+            return (
+                self._get_string_arg(node, 1, context)
+                or self._get_select_option_kw(node, context)
+                or self._get_string_arg(node, 0, context)
+            )
+        return None
+
+    def _get_select_option_kw(self, node: ast.Call, context: dict[str, str]) -> str | None:
+        for kw in node.keywords:
+            if kw.arg not in ("label", "value"):
+                continue
+
+            prefix = f"{kw.arg}="
+
+            if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                return prefix + kw.value.value
+            if isinstance(kw.value, ast.Name):
+                resolved = context.get(kw.value.id)
+                return (prefix + resolved) if resolved is not None else None
+            if isinstance(kw.value, ast.JoinedStr):
+                return prefix + self._extract_fstring(kw.value, context)
+
         return None
 
     def _is_chained_locator_call(self, node: ast.Call) -> bool:
         """Check if this call is chained from a locator method."""
         if not isinstance(node.func, ast.Attribute):
             return False
-        if not isinstance(node.func.value, ast.Call):
+        value: ast.AST = node.func.value
+
+        # Unwrap locator properties like .first / .last
+        # e.g., page.get_by_role(...).first.fill("x")
+        if isinstance(value, ast.Attribute) and value.attr in ("first", "last"):
+            value = value.value
+
+        if not isinstance(value, ast.Call):
             return False
-        inner_method = self._get_method_name(node.func.value)
-        return inner_method in ("locator", "get_by_role", "get_by_text",
-                                "get_by_label", "get_by_placeholder",
-                                "get_by_test_id", "get_by_alt_text")
+
+        inner_method = self._get_method_name(value)
+        return inner_method in (
+            "locator",
+            "get_by_role",
+            "get_by_text",
+            "get_by_label",
+            "get_by_placeholder",
+            "get_by_test_id",
+            "get_by_alt_text",
+            "nth",
+        )
 
     def _get_string_arg(self, node: ast.Call, index: int, context: dict[str, str]) -> str | None:
         """Get a string argument at the given index."""
@@ -402,38 +439,73 @@ class PlaywrightParser(TestParser):
         Handles chains like: page.get_by_text("X").locator("..").click()
         Returns the full chain expression: "get_by_text('X').locator('..')"
         """
-        # Collect all locator methods in the chain (in reverse order)
-        chain_parts: list[tuple[str, str]] = []
-        current = node.func
-
-        while isinstance(current, ast.Attribute):
-            if isinstance(current.value, ast.Call):
-                inner_call = current.value
-                inner_method = self._get_method_name(inner_call)
-
-                if inner_method in self.LOCATOR_CHAIN_METHODS:
-                    selector = self._get_string_arg(inner_call, 0, context)
-                    if selector:
-                        chain_parts.insert(0, (inner_method, selector))
-
-                # Continue up the chain to find more locator methods
-                current = inner_call.func
-            else:
-                current = current.value
-
-        if not chain_parts:
+        if not isinstance(node.func, ast.Attribute):
             return None
 
-        # Single simple locator: return as before for backwards compatibility
-        if len(chain_parts) == 1:
-            method, selector = chain_parts[0]
-            if method == "locator":
-                return selector
-            return f"{method}({selector!r})"
+        # node.func.value is the receiver the action is called on.
+        # Example: page.get_by_role(...).first.click()
+        # node.func = Attribute(attr='click', value=Attribute(attr='first', value=Call(get_by_role...)))
+        return self._format_locator_expr(node.func.value, context)
 
-        # Multiple chain: return full expression
-        # e.g., "get_by_text('Atlas Runner Sneaker').locator('..')"
-        return ".".join(f"{m}({s!r})" for m, s in chain_parts)
+    def _format_locator_expr(self, expr: ast.AST, context: dict[str, str]) -> str | None:
+        """Format a locator expression (without the leading `page.`) into a string.
+
+        Examples:
+        - page.locator("#form") -> "locator('#form')"
+        - page.get_by_role("link", name="X").first -> "get_by_role('link', name='X').first"
+        - page.get_by_text("X").locator("..")-> "get_by_text('X').locator('..')"
+        """
+        # Properties like .first / .last
+        if isinstance(expr, ast.Attribute):
+            if expr.attr in ("first", "last"):
+                base = self._format_locator_expr(expr.value, context)
+                if base is None:
+                    return None
+                return f"{base}.{expr.attr}"
+            return None
+
+        # Method calls like .locator(...), .get_by_role(...), .nth(...)
+        if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute):
+            method = expr.func.attr
+            if method not in self.LOCATOR_CHAIN_METHODS and method != "nth":
+                return None
+
+            base = self._format_locator_expr(expr.func.value, context)
+            args_str = self._get_all_args_string(expr, context)
+            part = f"{method}({args_str})"
+
+            if base is None:
+                return part
+            return f"{base}.{part}"
+
+        # Stop at names (e.g., the `page` fixture)
+        if isinstance(expr, ast.Name):
+            return None
+
+        return None
+
+    def _get_all_args_string(self, node: ast.Call, context: dict[str, str]) -> str:
+        """Get string representation of all arguments for a call."""
+        args: list[str] = []
+        # Positional args
+        for arg in node.args:
+            val = self._eval_arg(arg, context)
+            args.append(repr(val))
+
+        # Keyword args
+        for kw in node.keywords:
+            val = self._eval_arg(kw.value, context)
+            args.append(f"{kw.arg}={repr(val)}")
+
+        return ", ".join(args)
+
+    def _eval_arg(self, arg: ast.AST, context: dict[str, str]) -> str | bool | int | float | None:
+        """Evaluate an argument node to a python value."""
+        if isinstance(arg, ast.Constant):
+            return arg.value
+        if isinstance(arg, ast.Name):
+            return context.get(arg.id, arg.id)  # Return value or name if unknown
+        return "..."  # Fallback for complex expressions
 
     def _find_expect_locator(self, node: ast.Call, context: dict[str, str]) -> str | None:
         """Find the locator from an expect() assertion chain."""
@@ -461,11 +533,8 @@ class PlaywrightParser(TestParser):
         if method in ("locator", "get_by_role", "get_by_text",
                       "get_by_label", "get_by_placeholder",
                       "get_by_test_id", "get_by_alt_text"):
-            selector = self._get_string_arg(node, 0, context)
-            if selector:
-                if method != "locator":
-                    return f"{method}({selector!r})"
-                return selector
+            args_str = self._get_all_args_string(node, context)
+            return f"{method}({args_str})"
         return None
 
     def _get_source_segment(self, source: str, node: ast.AST) -> str:
