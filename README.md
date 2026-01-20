@@ -36,9 +36,19 @@ https://github.com/user-attachments/assets/de1d647b-527b-4c66-a46b-7b86247c345c
     pip install codevid
     ```
 
+    For local development with `uv` (from source):
+    ```bash
+    uv sync --extra dev
+    ```
+
 2.  **Install Playwright Browsers**:
     ```bash
     playwright install chromium
+    ```
+
+    If you used `uv`, run:
+    ```bash
+    uv run playwright install chromium
     ```
 
 ## 🔑 Configuration
