@@ -1,6 +1,7 @@
 """Kokoro TTS provider."""
 
 import logging
+from enum import StrEnum
 from pathlib import Path
 
 from codevid.audio.tts import AudioSegment, TTSError, TTSProvider
@@ -8,15 +9,30 @@ from codevid.audio.tts import AudioSegment, TTSError, TTSProvider
 logger = logging.getLogger(__name__)
 
 
+class KokoroVoice(StrEnum):
+    """Known Kokoro voice IDs (Kokoro v0.19+)."""
+
+    AF_BELLA = "af_bella"
+    AF_NICOLE = "af_nicole"
+    AF_SARAH = "af_sarah"
+    AF_SKY = "af_sky"
+    AM_ADAM = "am_adam"
+    AM_MICHAEL = "am_michael"
+    BF_EMMA = "bf_emma"
+    BF_ISABELLA = "bf_isabella"
+    BM_GEORGE = "bm_george"
+    BM_LEWIS = "bm_lewis"
+
+
 class KokoroTTSProvider(TTSProvider):
     """Local TTS provider using Kokoro via the 'kokoro' package."""
 
-    def __init__(self, voice: str | None = None, speed: float = 1.0) -> None:
+    def __init__(self, voice: str | KokoroVoice = "af_bella", speed: float = 1.0) -> None:
         """Initialize Kokoro TTS provider.
 
         Args:
-            voice: Voice ID (default: 'af_bella').
-            speed: Speed multiplier (default: 1.0).
+            voice: Voice ID.
+            speed: Speed multiplier.
         """
         import warnings
 
@@ -58,20 +74,29 @@ class KokoroTTSProvider(TTSProvider):
         except ImportError:
             pass
 
-        # Set defaults
-        self._voice = voice or "af_bella"  # Common default female voice
+        voice_str = voice.value if isinstance(voice, KokoroVoice) else voice
+        try:
+            self._voice = KokoroVoice(voice_str).value
+        except ValueError as e:
+            available = ", ".join(v.value for v in KokoroVoice)
+            raise TTSError(
+                f"Unknown voice: {voice_str}. Available: {available}",
+                provider="local_kokoro",
+                voice=voice_str,
+            ) from e
+
         self._speed = speed
 
         # Initialize pipeline only once to save resources
         # 'a' = American English
         try:
             # We must pass repo_id to avoid the warning, and verify it doesn't trigger pip.
-            self._pipeline = KPipeline(lang_code='a', repo_id='hexgrad/Kokoro-82M')
+            self._pipeline = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M")
         except Exception as e:
             # If it fails due to pip, we might need to explain it better or fix the env.
             raise TTSError(
                 f"Failed to initialize Kokoro pipeline: {e}",
-                provider="local_kokoro"
+                provider="local_kokoro",
             ) from e
 
     @property
@@ -143,11 +168,4 @@ class KokoroTTSProvider(TTSProvider):
 
     async def list_voices(self) -> list[str]:
         """List available voices."""
-        # Hardcoded list of common voices available in Kokoro v0.19+
-        # This list might need updating as the model evolves
-        return [
-            "af_bella", "af_nicole", "af_sarah", "af_sky",
-            "am_adam", "am_michael",
-            "bf_emma", "bf_isabella",
-            "bm_george", "bm_lewis",
-        ]
+        return [v.value for v in KokoroVoice]
