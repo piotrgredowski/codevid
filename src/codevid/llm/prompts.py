@@ -30,6 +30,10 @@ REQUIRED STYLE:
 - Be action-specific: use exact values from steps (e.g., "Enter admin@acme.com" not "Enter your email")
 - One sentence per step unless combining related actions
 - Address viewer as "you" only when necessary
+- Don't use "https://example.com" - just say "example.com", omit not spoken parts of URLs
+- Don't add any unnecessary characters, punctuation, or formatting
+- Don't wrap text in quotes or asterisks
+- **https://www.random.org/** should be written as "random.org"
 
 PATTERNS TO AVOID (never use these):
 - Weak openings: "So," "Now," "Okay," "Alright," "Next," "First,"
@@ -60,6 +64,8 @@ RULES:
 - Use imperative mood: "Click Submit" not "Now we click Submit"
 - Include exact values: "Enter 138 in the price field" not "Enter a value"
 - Skip wait/load actions entirely (return empty string)
+- Always return text which can be read unambiguously, don't use "coin(s)" or "sth"
+- Always return full words, never abbreviations
 
 NEVER USE:
 - "So," "Now," "Okay," "Next," "First," "Let's," "We'll"
@@ -120,5 +126,5 @@ def format_steps_for_prompt(steps: list, include_skipped: bool = False) -> str:
             continue
         value_str = f" with value '{step.value}'" if step.value else ""
         # Use original index (0-based in output, matching step_index in segments)
-        lines.append(f"Step {i}: {step.action.value.upper()}: {step.target}{value_str}")
+        lines.append(f"Step {i+1}: {step.action.value.upper()}: {step.target}{value_str}")
     return "\n".join(lines)

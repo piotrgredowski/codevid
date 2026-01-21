@@ -47,7 +47,7 @@ class ParsedTest:
     steps: list[TestStep]
     setup_code: str = ""
     teardown_code: str = ""
-    metadata: dict = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict)
 
     @property
     def step_count(self) -> int:
