@@ -634,7 +634,9 @@ class VideoComposer:
             color="white",
             font=None,
             method="caption",
-            size=(int(size[0] * 0.8), None),
+            # Provide an explicit height; MoviePy can otherwise under-estimate text height
+            # for multi-line titles and clip the bottom of the text.
+            size=(int(size[0] * 0.8), int(size[1] * 0.6)),
             text_align="center",
             interline=6,
         )

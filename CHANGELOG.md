@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.4.0 (2026-01-06)
+
+### Features
+
+- Enhance video recording with block pauses
+  ([`cde2fa8`](https://github.com/MStaniaszek1998/codevid/commit/cde2fa8902b2ff014df5bccc35dd4be4ba2e8012))
+
+
 ## v1.3.0 (2025-12-29)
 
 
