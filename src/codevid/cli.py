@@ -12,7 +12,7 @@ from codevid import __version__
 from codevid.config import load_config
 from codevid.models.project import LLMProviderType, TTSProviderType
 from codevid.llm.factory import LLMError, create_llm_provider
-from codevid.llm.simple import SimpleLLM
+from codevid.llm.provider_simple import SimpleLLM
 from codevid.parsers.playwright import PlaywrightParser
 from codevid.pipeline import Pipeline, PipelineConfig
 from codevid.audio.factory import TTSError, create_tts_provider
